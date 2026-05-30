@@ -14,3 +14,7 @@ Dataset contains 2,433 unique patches over French metropolitan territory. This d
 - ZONES_*.npy. Border tracking map, it categorizes pixels into three zones, 1 for inside the field, 2 exact border/edhe of the field and 0 is outside.
 
 **NORM_S2_patch.json** contains pre-calculated channel statistics (Mean and Standard Deviation) to normilize images properly.
+
+## Example patch
+
+![Example](../image.png)
