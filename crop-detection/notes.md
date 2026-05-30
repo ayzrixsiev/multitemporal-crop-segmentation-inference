@@ -1,14 +1,16 @@
-# Датасет
-Я работаю над продвинутым датасетом Pastis который был сделан спутником Sentinel-2. Фото полей сделаны за целый год, то есть мы имеем снимки полей и их посевов за каждый сезон года. Наш тензор выглядит следующим образом: (38, 10, 128, 128).
-38 (Временные метки) - сколько раз спутник пролетел над полем за сезон.
-10 (Спектаральные каналы) - это значит что снимки не просто RGB, а так же имеют и другие каналы, как например NIR (ближний инфрокрасный) и Red Edge. Растения как раз отражают эти цвета в зависимости от их здоровья и типа.
-128х128 (Это размер каждого снятого снимка с полями) - площадь примерно 1.3 на 1.3 км.
-Так же сами маски имеют три слоя (Semantic Segmentation, Instance Segmentation, Boundary/Edge Mask). Нас будет интересовать первый слой, так как именно он нужен нам для классификации типа растения. К примеру: 0 это фон, 1 это пшеница, 2 это кукуруза. Модель будет учится предсказывать именно этот слой.
+# Pastis
 
-# Модель
-Я буду использовать модель **U-TAE (U-shaped Temporal Attention Encoder)**. Это умный гибрид двух концепций:
-**L-TAE (Temporal Attention)** - это механизм внимания (как например в чатгпт). Он просматривает все 38 снимков и решает: Вот снимок номер 12 (май), он самый важный, чтобы понять это пшеница, потому что она тогда цвела. А снимок номер 2 с облаками, я его проигнорирую.
-**U-shape (Spatial Decoder)** - после того как модель поймет что растет на снимке, ей нужно понять где проходят границы полей. Для этого нам понадобиться модель U-NET, которая восстанавливает детализацию до каждого пикселя.
+Dataset contains 2,433 unique patches over French metropolitan territory. This dataset split into 5 folds/groups, for each of this fold we have pre-calculated Mean and Std for future scalling. Images are in the form of four dimensional spatio-temporal tensor, example: (43, 10, 128, 128), where 43 is time series counter, in other words - versions of the same territory throughout the year. In one of the sample images we observed over 100 crop fields. Each field in dataset is uniqely identified with 7 digit numbers, but for each fields within image we have dedicated sequential IDs for each field (e.g 0-119). The dataset contains both semantic (pixel level object detection) and instance annotations (object detection and separation from each other).
 
-# Что я узнал в процессе работы
-Сжатие снимков это процесс получения точной информации для модели, к примеру в снимоке сделанным из космоса каждый пиксель это огромная территория, и в таком виде каждый пиксель просто какое то непонятное пятно. При сжатии снимка мы как бы зумим в нее и теперь пиксель не просто пятно а целый лес или поле.
+**DATA_S2** (2,468 files), this folder contains images.     
+
+**ANNOTATIONS** (4,866 files, exactly 2 per image):     
+- TARGET_*.npy: The actual Crop Types (Corn, Wheat, Meadow, etc. overall we have 0-19 crop types). This is our training target.
+- ParcelIDs_*.npy: The permanent Government Land Registry IDs (7-digit numbers). Which are needed to label each field uniquely.
+
+**INSTANCE_ANNOTATIONS** (7,299 files, exactly 3 per image):        
+- INSTANCES_*.npy. Local field counter map (looks like multicolored block). It assigns each pixel in the same field one integer value.       
+- HEATMAP_*.npy. A centerness map, pixels in the exact center of a fiels are bright 1.0, and closer they are to the border pixels fade down to dark 0.0. This is necessary for teaching a model to find "heart" of the fields
+- ZONES_*.npy. Border tracking map, it categorizes pixels into three zones, 1 for inside the field, 2 exact border/edhe of the field and 0 is outside.
+
+**NORM_S2_patch.json** contains pre-calculated channel statistics (Mean and Standard Deviation) to normilize images properly.
