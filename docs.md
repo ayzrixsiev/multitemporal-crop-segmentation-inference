@@ -17,7 +17,7 @@ Dataset contains 2,433 unique patches over French metropolitan territory, with 0
 
 ## Example patch
 
-![Example](../image.png)
+![Example](./image.png)
 
 
 
