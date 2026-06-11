@@ -35,3 +35,9 @@ Dataset contains 2,433 unique patches over French metropolitan territory, with 0
     - It creates a secondary array called a Mask. The mask is filled with 1 for the real data, and 0 for the fake zero-padding. My model will use this mask later to ignore the zeros.
 
 **Second** we need to deal with class imbalance in the dataset, because if you look at the dataset documentation table, classes like Meadow (31,292 fields) and Void Labels (35,924 fields) completely dominate rare crops like Potatoes (551 fields).
+
+
+
+
+
+Input tensor is 4D and segmentation map is 2D.

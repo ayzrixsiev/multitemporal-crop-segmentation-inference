@@ -171,3 +171,147 @@ class Pastis_Dataset(tdata.Dataset):
     # get temporal positional encoding, [2, 4, 12, 18 ...] days passed for of all snapshots of all images
     def get_dates(self, id_patch, sat):
         return self.date_range[np.where(self.date_tables[sat][id_patch] == 1)[0]]
+
+    # get a patch
+    def __getitem__(self, item):
+        id_patch = self.id_patches[item]
+
+        # check whether we saved a data in ram, if not take it and make it an array
+        if not self.cache or item not in self.memory.keys():
+            data = {
+                satellite: np.load(
+                    os.path.join(
+                        self.folder,
+                        "DATA_{}".format(satellite),
+                        "{}_{}.npy".format(satellite, id_patch),
+                    )
+                ).astype(np.float32)
+                for satellite in self.sats
+            }  # T x C x H x W arrays
+            data = {s: torch.from_numpy(a) for s, a in data.items()}
+
+            # we can not subtract 1D tensor (precalculated mean) from 4D tensor (our images), hence we are adding dummy dimensions to make it look [1, channels, 1, 1]
+            if self.norm is not None:
+                data = {
+                    s: (d - self.norm[s][0][None, :, None, None])
+                    / self.norm[s][1][None, :, None, None]
+                    for s, d in data.items()
+                }
+
+            # pick task, semantic or panoptic segmentation
+            if self.target == "semantic":
+                target = np.load(
+                    os.path.join(
+                        self.folder, "ANNOTATIONS", "TARGET_{}.npy".format(id_patch)
+                    )
+                )
+                target = torch.from_numpy(target[0].astype(int))
+
+                if self.class_mapping is not None:
+                    target = self.class_mapping(target)
+
+                elif self.target == "instance":
+                    heatmap = np.load(
+                        os.path.join(
+                            self.folder,
+                            "INSTANCE_ANNOTATIONS",
+                            "HEATMAP_{}.npy".format(id_patch),
+                        )
+                    )
+
+                    instance_ids = np.load(
+                        os.path.join(
+                            self.folder,
+                            "INSTANCE_ANNOTATIONS",
+                            "INSTANCES_{}.npy".format(id_patch),
+                        )
+                    )
+                    pixel_to_object_mapping = np.load(
+                        os.path.join(
+                            self.folder,
+                            "INSTANCE_ANNOTATIONS",
+                            "ZONES_{}.npy".format(id_patch),
+                        )
+                    )
+
+                    pixel_semantic_annotation = np.load(
+                        os.path.join(
+                            self.folder, "ANNOTATIONS", "TARGET_{}.npy".format(id_patch)
+                        )
+                    )
+
+                    if self.class_mapping is not None:
+                        pixel_semantic_annotation = self.class_mapping(
+                            pixel_semantic_annotation[0]
+                        )
+                    else:
+                        pixel_semantic_annotation = pixel_semantic_annotation[0]
+
+                    size = np.zeros((*instance_ids.shape, 2))
+                    object_semantic_annotation = np.zeros(instance_ids.shape)
+                    for instance_id in np.unique(instance_ids):
+                        if instance_id != 0:
+                            h = (instance_ids == instance_id).any(axis=-1).sum()
+                            w = (instance_ids == instance_id).any(axis=-2).sum()
+                            size[pixel_to_object_mapping == instance_id] = (h, w)
+                            object_semantic_annotation[
+                                pixel_to_object_mapping == instance_id
+                            ] = pixel_semantic_annotation[instance_ids == instance_id][
+                                0
+                            ]
+
+                    target = torch.from_numpy(
+                        np.concatenate(
+                            [
+                                heatmap[:, :, None],  # 0
+                                instance_ids[:, :, None],  # 1
+                                pixel_to_object_mapping[:, :, None],  # 2
+                                size,  # 3-4
+                                object_semantic_annotation[:, :, None],  # 5
+                                pixel_semantic_annotation[:, :, None],  # 6
+                            ],
+                            axis=-1,
+                        )
+                    ).float()
+
+            if self.cache:
+                if self.mem16:
+                    self.memory[item] = [{k: v.half() for k, v in data.items()}, target]
+                else:
+                    self.memory[item] = [data, target]
+
+        else:
+            data, target = self.memory[item]
+            if self.mem16:
+                data = {k: v.float() for k, v in data.items()}
+
+        # grab the current day array ([12, 14, 49]) that matches current image stack
+        if not self.cache or id_patch not in self.memory_dates.keys():
+            dates = {
+                s: torch.from_numpy(self.get_dates(id_patch, s)) for s in self.sats
+            }
+            if self.cache:
+                self.memory_dates[id_patch] = dates
+        else:
+            dates = self.memory_dates[id_patch]
+
+        if self.mono_date is not None:
+            if isinstance(self.mono_date, int):
+                data = {s: data[s][self.mono_date].unsqueeze(0) for s in self.sats}
+                dates = {s: dates[s][self.mono_date] for s in self.sats}
+            else:
+                mono_delta = (self.mono_date - self.reference_date).days
+                mono_date = {
+                    s: int((dates[s] - mono_delta).abs().argmin()) for s in self.sats
+                }
+                data = {s: data[s][mono_date[s]].unsqueeze(0) for s in self.sats}
+                dates = {s: dates[s][mono_date[s]] for s in self.sats}
+
+        if self.mem16:
+            data = {k: v.float() for k, v in data.items()}
+
+        if len(self.sats) == 1:
+            data = data[self.sats[0]]
+            dates = dates[self.sats[0]]
+
+        return (data, dates), target
