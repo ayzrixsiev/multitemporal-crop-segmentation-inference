@@ -21,23 +21,6 @@ Dataset contains 2,433 unique patches over French metropolitan territory, with 0
 
 
 
-## Workflow
-**First** we need to build a Pytorch dataset that will handle three main things:        
-1. Fold filtering, which is basically separating 5 patches, so that we can train our model on 1-4 folds and evaluate on fold 5.
-2. Read the mean and standart deviation vectors from .json metadata for each fold and normilize patches to 0-1.
-3. We need to deal with different time dimensions of each patch in the dataset. Solution is to apply dynamic batch padding, we are going to implement a function called collate_fn, which takes a certain amount of batches/images finds a local maximum (the highest time series number among 4 or 8 batches) and then alligns the rest of the images' time series values to it. Here is exactly how it works:
-    - It sees the batch has lengths: [43, 50, 61, 38].
-
-    - It identifies the local maximum (T_max = 61).
-
-    - It takes the tensor with 43 dates, and glues 18 frames of pure zeros to the end of it so its length becomes 61. It does this for all shorter images.
-
-    - It creates a secondary array called a Mask. The mask is filled with 1 for the real data, and 0 for the fake zero-padding. My model will use this mask later to ignore the zeros.
-
-**Second** we need to deal with class imbalance in the dataset, because if you look at the dataset documentation table, classes like Meadow (31,292 fields) and Void Labels (35,924 fields) completely dominate rare crops like Potatoes (551 fields).
-
-
-
-
-
+**Notes:**                  
 Input tensor is 4D and segmentation map is 2D.
+Time series dimensions are different in each image, which crashes Pytorch, i padded it with zeros.
