@@ -21,7 +21,6 @@ class Pastis_Dataset(tdata.Dataset):
         folds=None,
         reference_date="2018-09-01",
         class_mapping=None,
-        mono_data=None,
         sats=["S2"],
     ):
         """
@@ -47,9 +46,6 @@ class Pastis_Dataset(tdata.Dataset):
             folds (list, optional): List of ints specifying which of the 5 official
                 folds to load. By default (when None is specified) all folds are loaded.
             class_mapping (dict, optional): to create grouping of classes
-            mono_date (int, str, optional): if you provide an argm, only one date out
-                whole time-series data will be processed. if it is a string, it should be
-                in format 'YYYY-MM-DD' and the closest available date will be selected.
             sats (list): defines the satellites to use (Sentinel-2)
         """
         super(Pastis_Dataset, self).__init__()
@@ -60,13 +56,6 @@ class Pastis_Dataset(tdata.Dataset):
         self.sats = sats
         self.cache = cache
         self.mem16 = mem16
-        self.mono_date = None
-        if mono_data is not None:
-            self.mono_date = (
-                datetime(*map(int, mono_data.split("-")))
-                if "-" in mono_data
-                else int(mono_data)
-            )
         self.memory = {}  # ram system for fast data access
         self.memory_dates = (
             {}
@@ -198,7 +187,65 @@ class Pastis_Dataset(tdata.Dataset):
                     for s, d in data.items()
                 }
 
-            # pick task, semantic or panoptic segmentation
+            """
+            pick the task: semantic or instance segmentation
+                - semantic ("what this crop is" task): just loads 2D semantic maps (ground thruth)
+                - instance ("unique field distinguish" task): creates two empty matrices/canvas:
+                        1. size = np.zeros((*instance_ids.shape, 2)) canvas with two pages
+                        2. object_semantic_annotation = np.zeros(instance_ids.shape)
+                        we take one ground truth of the current patch, and start going through it to identify three main things:
+                        height, width and crop type of the field. so that we can take them and put into our canvases.
+                        example ground truth:
+                        0   0   0   0   0
+                        0   5   5   5   5  <-- this 3x4 block is Field #5, height 3 and width 4
+                        0   5   5   5   5
+                        0   5   5   5   5
+                        0   0   0   0   0
+
+                        the loop goes throught this image and finds where pixel is 5, and then changes the values in the size canvas from 0
+                        to corresponding ground truth's field dimensions, in our case (3, 4)
+
+                        0   0   0   0   0
+                        0   3   3   3   3  <-- height
+                        0   3   3   3   3
+                        0   3   3   3   3
+                        0   0   0   0   0
+
+                        0   0   0   0   0
+                        0   4   4   4   4  <-- width  
+                        0   4   4   4   4
+                        0   4   4   4   4
+                        0   0   0   0   0
+
+                        and object_semantic_annotation canvas, we find pixel with number 5 and change the value in canvas from 0 to it's crop type,
+                        wheat (1) in our example
+
+                        0   0   0   0   0
+                        0   1   1   1   1  
+                        0   1   1   1   1
+                        0   1   1   1   1
+                        0   0   0   0   0 
+
+                        these three layers are created by us, other 4 layers i we get from the dataset itself.
+                        in the end we merge all 7 together into one tensor - (128x128x7)
+                        7 present layers:
+                            - heatmap: field-center proximity, the closer pixel to the center the hotter it is, we teach the model where the heart of the field is
+                            - instance_ids: unique field boundary ids for separation
+                            - pixel_to_object_mapping: fields are broken down into zones, we can idetify where each pixel belongs to
+                            - size: h and w of the fields (we created)
+                            - object_semantic_annotation: crop type of each field (we created)
+                            - pixel_semantic_annotation: every individual pixel's crop type
+                        each pixel in the resulting 3D array (ground truth) holds info from these layers 
+                        let's look at the example:
+                        pixel A (located in the center of the field ID #5, size 3x4, zone #8)
+                        pixel A[heatmap] = 1.0 (the hottest spot, because it is the center), we have a measurement on how far this pixel from the center
+                        pixel A[instance_id] = #5 (belongs to the unique field #5)
+                        pixel A[pixel_to_object_mapping] = #8 (specific zone pixel belongs to in the field #5)
+                        pixel A[size h or w] = 3 or 4
+                        pixel A[object_semantic_annotation] = 1 (wheat) what crop is in the field that this pixel belongs to
+                        pixel A[pixel_semantic_annotation] = 1 (wheat) what crop type this specific pixel is
+                        
+            """
             if self.target == "semantic":
                 target = np.load(
                     os.path.join(
@@ -210,6 +257,7 @@ class Pastis_Dataset(tdata.Dataset):
                 if self.class_mapping is not None:
                     target = self.class_mapping(target)
 
+                # getting 7 layers
                 elif self.target == "instance":
                     heatmap = np.load(
                         os.path.join(
@@ -226,6 +274,7 @@ class Pastis_Dataset(tdata.Dataset):
                             "INSTANCES_{}.npy".format(id_patch),
                         )
                     )
+                    # even though instance ids track each field, sometimes those fields are separated by zones, this part tracks that
                     pixel_to_object_mapping = np.load(
                         os.path.join(
                             self.folder,
@@ -247,6 +296,7 @@ class Pastis_Dataset(tdata.Dataset):
                     else:
                         pixel_semantic_annotation = pixel_semantic_annotation[0]
 
+                    # create two canvases
                     size = np.zeros((*instance_ids.shape, 2))
                     object_semantic_annotation = np.zeros(instance_ids.shape)
                     for instance_id in np.unique(instance_ids):
@@ -259,7 +309,7 @@ class Pastis_Dataset(tdata.Dataset):
                             ] = pixel_semantic_annotation[instance_ids == instance_id][
                                 0
                             ]
-
+                    # merge every layer
                     target = torch.from_numpy(
                         np.concatenate(
                             [
@@ -274,18 +324,22 @@ class Pastis_Dataset(tdata.Dataset):
                         )
                     ).float()
 
+            # faster training trick, we save loaded images into our RAM, we take processed image and 7 layer ground truth and put them into our dict self.memory
             if self.cache:
-                if self.mem16:
+                if (
+                    self.mem16
+                ):  # if enabled we cut from 32 float bit down to 16 to save ram
                     self.memory[item] = [{k: v.half() for k, v in data.items()}, target]
                 else:
                     self.memory[item] = [data, target]
 
+        # start using ram for getting the data after epoch 1, bacause we processed the whole dataset and stored it all in ram for faster access
         else:
             data, target = self.memory[item]
             if self.mem16:
                 data = {k: v.float() for k, v in data.items()}
 
-        # grab the current day array ([12, 14, 49]) that matches current image stack
+        # grab the current day array ([12, 14, 49]) that matches current image stack, and store it in self.memory_dates, if was not saved before, cache trick
         if not self.cache or id_patch not in self.memory_dates.keys():
             dates = {
                 s: torch.from_numpy(self.get_dates(id_patch, s)) for s in self.sats
@@ -295,23 +349,76 @@ class Pastis_Dataset(tdata.Dataset):
         else:
             dates = self.memory_dates[id_patch]
 
-        if self.mono_date is not None:
-            if isinstance(self.mono_date, int):
-                data = {s: data[s][self.mono_date].unsqueeze(0) for s in self.sats}
-                dates = {s: dates[s][self.mono_date] for s in self.sats}
-            else:
-                mono_delta = (self.mono_date - self.reference_date).days
-                mono_date = {
-                    s: int((dates[s] - mono_delta).abs().argmin()) for s in self.sats
-                }
-                data = {s: data[s][mono_date[s]].unsqueeze(0) for s in self.sats}
-                dates = {s: dates[s][mono_date[s]] for s in self.sats}
-
         if self.mem16:
             data = {k: v.float() for k, v in data.items()}
 
+        """
+        unpack dicts, since data, dates were saved as dict, like this:
+        data = {
+            "S2": torch.Tensor(30, 10, 128, 128),
+            "S1": torch.Tensor(50, 4, 128, 128)
+        }
+
+        so we extract only tensor (30, 10, 128, 128) and array (50, 4, 128, 128)
+        """
         if len(self.sats) == 1:
             data = data[self.sats[0]]
             dates = dates[self.sats[0]]
 
+        """
+        if you choose semantic segmentation, you will get:
+        
+        data: 4D tensor (time, channels, height, width) satellite image
+        dates: 1D array (time) list of days each image was taken relative to the reference date
+        target: 2D array (height, width) image with just crop types indentifying numbers 
+
+        if you choose instance segmentation, you will get:
+        
+        data: 4D tensor (time, channels, height, width) satellite image
+        dates: 1D array (time) list of days each image was taken relative to the reference date
+        target: 3D array (height, width, 7 layers)  
+        """
         return (data, dates), target
+
+
+"""process raw date 20180905 into
+str(x)[:4] "2018" (Year)
+str(x)[4:6] "09" (Month)
+str(x)[6:] "05" (Day)
+
+and then subtract from reference date
+"""
+
+
+def prepare_dates(date_dict, reference_date):
+    d = pd.DataFrame().from_dict(date_dict, orient="index")
+    d = d[0].apply(
+        lambda x: (
+            datetime(int(str(x)[:4]), int(str(x)[4:6]), int(str(x)[6:]))
+            - reference_date
+        ).days
+    )
+    return d.values
+
+
+# normilize image using precalculated math
+def compute_norm_vals(folder, sat):
+    norm_vals = {}
+    for fold in range(1, 6):
+        dt = Pastis_Dataset(folder=folder, norm=False, folds=[fold], sats=[sat])
+        means = []
+        stds = []
+        for i, b in enumerate(dt):
+            print("{}/{}".format(i, len(dt)), end="\r")
+            data = b[0][0][sat]  # T x C x H x W
+            data = data.permute(1, 0, 2, 3).contiguous()  # C x B x T x H x W
+            means.append(data.view(data.shape[0], -1).mean(dim=-1).numpy())
+            stds.append(data.view(data.shape[0], -1).std(dim=-1).numpy())
+
+        mean = np.stack(means).mean(axis=0).astype(float)
+        std = np.stack(stds).mean(axis=0).astype(float)
+
+        norm_vals["Fold_{}".format(fold)] = dict(mean=list(mean), std=list(std))
+
+    with open(os.path.join(folder, "NORM_{}_patch.json".format(sat)), "w") as file:
+        file.write(json.dumps(norm_vals, indent=4))
