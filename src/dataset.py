@@ -24,8 +24,7 @@ class Pastis_Dataset(tdata.Dataset):
         sats=["S2"],
     ):
         """
-        Pytorch dataset to load data from pastis, for semantic
-        and panoptic segmentation.
+        Pytorch dataset to load data from pastis, for semantic and instance segmentation.
         The dataset yields ((data, dates), target) tuples, where:
             - data contains the image time series (how much time we took photo of this territory throught the year)
             - dates contains number of days passed since the image was made compared to reference date,
@@ -381,7 +380,8 @@ class Pastis_Dataset(tdata.Dataset):
         return (data, dates), target
 
 
-"""process raw date 20180905 into
+"""
+process raw date 20180905 into
 str(x)[:4] "2018" (Year)
 str(x)[4:6] "09" (Month)
 str(x)[6:] "05" (Day)

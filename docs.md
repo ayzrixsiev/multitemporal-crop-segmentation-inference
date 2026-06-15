@@ -22,5 +22,5 @@ Dataset contains 2,433 unique patches over French metropolitan territory, with 0
 
 
 **Notes:**                  
-Input tensor is 4D and segmentation map is 2D.
-Time series dimensions are different in each image, which crashes Pytorch, i padded it with zeros.
+Input tensor is 4D and segmentation map is 2D.              
+Time series dimensions are different in each image, which crashes Pytorch, i padded it with zeros.          
