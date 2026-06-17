@@ -1,7 +1,6 @@
 import json
 import os
 from datetime import datetime
-from time import monotonic
 
 import geopandas as gpd
 import numpy as np
@@ -24,22 +23,18 @@ class Pastis_Dataset(tdata.Dataset):
         sats=["S2"],
     ):
         """
-        Pytorch dataset to load data from pastis, for semantic and instance segmentation.
-        The dataset yields ((data, dates), target) tuples, where:
-            - data contains the image time series (how much time we took photo of this territory throught the year)
-            - dates contains number of days passed since the image was made compared to reference date,
-            we do this to solve "gap" problem, where model can see a clear amount of time passed from a previously taken image.
-            we also can use this info to track growth speed, if a field turns from brown soil to bright green vegetation in 10 days, it’s likely one specific crop type.
-            - target is the semantic or instance target
-        Args:
+        pytorch dataset to load data from pastis, for semantic and instance segmentation
+        our input is 4D tensors (time, channels, height, width) and
+        dataset outputs the following tumple: ((data, dates), target)
+        args:
             folder (str): path to the dataset
             norm (bool): if true, images are standardised using pre-computed
                 channel-wise means and standard deviations.
             reference_date (str, Format : 'YYYY-MM-DD'): it is used for temporal attention layer.
-            target (str): 'semantic' or 'instance'. Defines which type of target is
+            target (str): 'semantic' or 'instance', defines which type of target is.
                 returned by the dataloader.
-            cache (bool): if true we save intially loaded images in ram for faster access.
-            mem16 (bool): Additional argument for cache. If True, the image time
+            cache (bool): if true we save intially loaded images in ram for faster access (created a variable).
+            mem16 (bool): additional argument for cache, if True, the image time
                 series tensors are stored in half precision in RAM for efficiency.
                 they are cast back to float32 when returned by __getitem__.
             folds (list, optional): List of ints specifying which of the 5 official
@@ -188,7 +183,7 @@ class Pastis_Dataset(tdata.Dataset):
 
             """
             pick the task: semantic or instance segmentation
-                - semantic ("what this crop is" task): just loads 2D semantic maps (ground thruth)
+                - semantic ("what this crop is" task): just loads 2D semantic maps (ground truth)
                 - instance ("unique field distinguish" task): creates two empty matrices/canvas:
                         1. size = np.zeros((*instance_ids.shape, 2)) canvas with two pages
                         2. object_semantic_annotation = np.zeros(instance_ids.shape)

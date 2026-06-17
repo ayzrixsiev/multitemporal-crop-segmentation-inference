@@ -8,12 +8,15 @@ from torch.utils import data
 np_str_obj_array_pattern = re.compile(r"[SaUO]")
 
 """
-we have a problem: our pytorch dataloader grabs random images and tries to glue them together to get one batch
-but our images [time, channels, height, width] have different time series sequences, meaning one territory
-can have 48 images taken throught the year, and another one 27, pytorch need to have exact same dimensions to create a single batch
+we have a problem: our pytorch dataloader grabs random tensors and tries to glue them together to get one batch
+but our tensors [time, channels, height, width] have different time series sequences, meaning one territory
+can have 48 images taken throught the year and another may have 27, pytorch needs to have same dimensions across all tensors
+we are trying to make one batch of 
 
 we implemented dynamic padding, which means we first measure the logest time series dimension in the current batch (pad_collate func)
 and then check whether others are align with it, if no we pad them with zeroes (pad_tensor)
+
+in the end we output 5D tensor (batch, time, channels, height, width)
 """
 
 
