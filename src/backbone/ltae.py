@@ -30,7 +30,7 @@ TRACK 1: Pixel A Timeline       TRACK 2: Pixel B Timeline
       [ Day 2: 95 ] <-- Cloud         [ Day 2: 99 ] <-- Cloud
       [ Day 3: 45 ]                   [ Day 3: 40 ]
 
- TRACK 3: Pixel C Timeline       TRACK 4: Pixel D Timeline
+TRACK 3: Pixel C Timeline       TRACK 4: Pixel D Timeline
       [ Day 1: 14 ]                   [ Day 1: 11 ]
       [ Day 2: 91 ] <-- Cloud         [ Day 2: 93 ] <-- Cloud
       [ Day 3: 48 ]                   [ Day 3: 42 ]

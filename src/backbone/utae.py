@@ -10,10 +10,10 @@ encoder shrinks those images in parallel at each step (layer) and scans it with 
 once we are finished (reached the bottom of U) we have turned massive images into tiny, highly concentrated map
 of pure features
 
-2. we then apply ltae to convert all those temporal data to make one summary of the tensor
+2. we then apply ltae to convert all those temporal data to make one summary of 4D tensor
 
 3. once we are done, we use decoder to upscale this one summary image back to it's original full size and keep the details
-with "skip connections" technique (when we upscale image steo by step, we inevitably lose details, to avoid it
+with "skip connections" technique (when we upscale image step by step, we inevitably lose details, to avoid it
 we take encoders output of that size we are trying to upscale to back, and glue them together)
 """
 
@@ -115,7 +115,7 @@ class UTAE(nn.Module):
         pad_mask = (input == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
         """
         creates a 2D boolean matrix of shape [batch size, time series]
-        since each batch may have different amount of clear (cloud free) data,
+        since each batch was dynamically padded with zeros,
         we need to label what is clean, what is not to define what to ignore during attention calculations
         """
         out = self.in_conv.smart_forward(input)
@@ -166,6 +166,7 @@ class TemporallySharedBlock(nn.Module):
         self.out_shape = None
         self.pad_value = pad_value
 
+    # flatten image, slide convolutional kernels, un-flatten to give it to ltae
     def smart_forward(self, input):
         if len(input.shape) == 4:
             return self.forward(input)
