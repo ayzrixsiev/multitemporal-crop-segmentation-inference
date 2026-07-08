@@ -39,7 +39,8 @@ class Pastis_Dataset(tdata.Dataset):
                 they are cast back to float32 when returned by __getitem__.
             folds (list, optional): List of ints specifying which of the 5 official
                 folds to load. By default (when None is specified) all folds are loaded.
-            class_mapping (dict, optional): to create grouping of classes
+            class_mapping (dict, optional): to create grouping of classes, we can change the ID assigned to a ceratin crop
+                and assign it to another, for example.
             sats (list): defines the satellites to use (Sentinel-2)
         """
         super(Pastis_Dataset, self).__init__()
@@ -65,7 +66,7 @@ class Pastis_Dataset(tdata.Dataset):
         # get metadata
         print("Processing metadata..")
 
-        # open and sort the data in ascending order
+        # open and sort the data in ascending order, to have a consistent input data
         self.meta_patch = gpd.read_file(os.path.join(folder, "metadata.geojson"))
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
@@ -73,7 +74,7 @@ class Pastis_Dataset(tdata.Dataset):
         self.date_tables = {s: None for s in sats}
         self.date_range = np.array(
             range(-200, 600)
-        )  # array of numbers, 200 days before reference date and 600 days after
+        )  # array of numbers, 200 days before reference date and 600 days after, making 800 days window that covers all images
         for s in sats:
             dates = self.meta_patch["dates-{}".format(s)]
             date_table = pd.DataFrame(
@@ -91,14 +92,17 @@ class Pastis_Dataset(tdata.Dataset):
                     ).days
                 )
                 """
-                create timeline matrix
+                create timeline matrix/grid - 1 means we took a photo, 0 means we did not
+
                 days | 1 | 2 | 3 | ... | 800 |
+                ------------------------------
                 img1 | 0 | 1 | 0 | ... |  1  |
+                ------------------------------
                 img2 | 1 | 1 | 0 | ... |  0  |
+                ------------------------------
                 img3 and etc
 
-                we need it to identify dates for all snapshots of each image
-                for our attention based model, we can 
+                we need it to identify dates for all snapshots of each image for our attention model
                 """
                 date_table.loc[pid, d.values] = 1
             date_table = date_table.fillna(0)
@@ -107,7 +111,7 @@ class Pastis_Dataset(tdata.Dataset):
             self.date_tables[s] = {
                 index: np.array(list(d.values()))
                 for index, d in date_table.to_dict(orient="index").items()
-            }
+            }  # when you call it, we get one row: self.date_tables["S2"][10001] = np.array([0, 0, 1, 0, 0, 0, 1, 0, ..., 0])
 
         print("Done.")
 
@@ -147,11 +151,12 @@ class Pastis_Dataset(tdata.Dataset):
             self.norm = None
         print("Dataset ready.")
 
-    # train data size to measure one epoch
+    # training data size to measure one epoch
     def __len__(self):
         return self.len
 
-    # get temporal positional encoding, [2, 4, 12, 18 ...] days passed for of all snapshots of all images
+    # get temporal positional encoding, [2, 4, 12, 18 ...] days passed for of all snapshots for chosen territory
+    # we check where the 1s are in the row in the timeline matrix
     def get_dates(self, id_patch, sat):
         return self.date_range[np.where(self.date_tables[sat][id_patch] == 1)[0]]
 
@@ -159,9 +164,9 @@ class Pastis_Dataset(tdata.Dataset):
     def __getitem__(self, item):
         id_patch = self.id_patches[item]
 
-        # check whether we saved a data in ram, if not take it and make it an array
+        # check whether we saved a data in ram, if not take it from dataset and convert it from numpy arrays into pytorch tensors
         if not self.cache or item not in self.memory.keys():
-            data = {
+            data = {  # T x C x H x W arrays
                 satellite: np.load(
                     os.path.join(
                         self.folder,
@@ -170,7 +175,7 @@ class Pastis_Dataset(tdata.Dataset):
                     )
                 ).astype(np.float32)
                 for satellite in self.sats
-            }  # T x C x H x W arrays
+            }
             data = {s: torch.from_numpy(a) for s, a in data.items()}
 
             # we can not subtract 1D tensor (precalculated mean) from 4D tensor (our images), hence we are adding dummy dimensions to make it look [1, channels, 1, 1]
@@ -184,7 +189,7 @@ class Pastis_Dataset(tdata.Dataset):
             """
             pick the task: semantic or instance segmentation
                 - semantic ("what this crop is" task): just loads 2D semantic maps (ground truth)
-                - instance ("unique field distinguish" task): creates two empty matrices/canvas:
+                - instance ("unique field separation" task): creates two empty matrices/canvas:
                         1. size = np.zeros((*instance_ids.shape, 2)) canvas with two pages
                         2. object_semantic_annotation = np.zeros(instance_ids.shape)
                         we take one ground truth of the current patch, and start going through it to identify three main things:
@@ -211,7 +216,7 @@ class Pastis_Dataset(tdata.Dataset):
                         0   4   4   4   4
                         0   0   0   0   0
 
-                        and object_semantic_annotation canvas, we find pixel with number 5 and change the value in canvas from 0 to it's crop type,
+                        and in object_semantic_annotation canvas, we find pixel with number 5 and change the value in canvas from 0 to it's crop type,
                         wheat (1) in our example
 
                         0   0   0   0   0
@@ -220,16 +225,16 @@ class Pastis_Dataset(tdata.Dataset):
                         0   1   1   1   1
                         0   0   0   0   0 
 
-                        these three layers are created by us, other 4 layers i we get from the dataset itself.
+                        these three layers are created by us, but we also have other 4 layers from the dataset itself.
                         in the end we merge all 7 together into one tensor - (128x128x7)
                         7 present layers:
                             - heatmap: field-center proximity, the closer pixel to the center the hotter it is, we teach the model where the heart of the field is
-                            - instance_ids: unique field boundary ids for separation
-                            - pixel_to_object_mapping: fields are broken down into zones, we can idetify where each pixel belongs to
+                            - instance_ids: unique field IDs for separation
+                            - pixel_to_object_mapping: fields are broken down into zones, we can idetify which zone each pixel belongs to
                             - size: h and w of the fields (we created)
                             - object_semantic_annotation: crop type of each field (we created)
                             - pixel_semantic_annotation: every individual pixel's crop type
-                        each pixel in the resulting 3D array (ground truth) holds info from these layers 
+                        each pixel in the resulting 3D array (ground truth) holds info from these 7 layers 
                         let's look at the example:
                         pixel A (located in the center of the field ID #5, size 3x4, zone #8)
                         pixel A[heatmap] = 1.0 (the hottest spot, because it is the center), we have a measurement on how far this pixel from the center
@@ -237,8 +242,7 @@ class Pastis_Dataset(tdata.Dataset):
                         pixel A[pixel_to_object_mapping] = #8 (specific zone pixel belongs to in the field #5)
                         pixel A[size h or w] = 3 or 4
                         pixel A[object_semantic_annotation] = 1 (wheat) what crop is in the field that this pixel belongs to
-                        pixel A[pixel_semantic_annotation] = 1 (wheat) what crop type this specific pixel is
-                        
+                        pixel A[pixel_semantic_annotation] = 1 (wheat) what crop type this specific pixel is      
             """
             if self.target == "semantic":
                 target = np.load(
@@ -318,7 +322,7 @@ class Pastis_Dataset(tdata.Dataset):
                         )
                     ).float()
 
-            # faster training trick, we save loaded images into our RAM, we take processed image and 7 layer ground truth and put them into our dict self.memory
+            # faster training trick, we save loaded images into our RAM, we take processed image and 7 layers ground truth and put them into our dict self.memory
             if self.cache:
                 if (
                     self.mem16
