@@ -1,0 +1,23 @@
+CLAUDE.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Training artifacts
+results/
+*.pth
+*.pth.tar
+*.pkl
+
+# Datasets
+PASTIS*/
+data/
+*.npy
+
+# Editors / OS
+.ipynb_checkpoints/
+.DS_Store

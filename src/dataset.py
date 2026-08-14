@@ -20,6 +20,7 @@ class Pastis_Dataset(tdata.Dataset):
         folds=None,
         reference_date="2018-09-01",
         class_mapping=None,
+        mono_date=None,
         sats=["S2"],
     ):
         """
@@ -51,6 +52,13 @@ class Pastis_Dataset(tdata.Dataset):
         self.sats = sats
         self.cache = cache
         self.mem16 = mem16
+        self.mono_date = None
+        if mono_date is not None:
+            self.mono_date = (
+                datetime(*map(int, mono_date.split("-")))
+                if "-" in mono_date
+                else int(mono_date)
+            )
         self.memory = {}  # ram system for fast data access
         self.memory_dates = (
             {}
@@ -255,72 +263,72 @@ class Pastis_Dataset(tdata.Dataset):
                 if self.class_mapping is not None:
                     target = self.class_mapping(target)
 
-                # getting 7 layers
-                elif self.target == "instance":
-                    heatmap = np.load(
-                        os.path.join(
-                            self.folder,
-                            "INSTANCE_ANNOTATIONS",
-                            "HEATMAP_{}.npy".format(id_patch),
-                        )
+            # getting 7 layers
+            elif self.target == "instance":
+                heatmap = np.load(
+                    os.path.join(
+                        self.folder,
+                        "INSTANCE_ANNOTATIONS",
+                        "HEATMAP_{}.npy".format(id_patch),
                     )
+                )
 
-                    instance_ids = np.load(
-                        os.path.join(
-                            self.folder,
-                            "INSTANCE_ANNOTATIONS",
-                            "INSTANCES_{}.npy".format(id_patch),
-                        )
+                instance_ids = np.load(
+                    os.path.join(
+                        self.folder,
+                        "INSTANCE_ANNOTATIONS",
+                        "INSTANCES_{}.npy".format(id_patch),
                     )
-                    # even though instance ids track each field, sometimes those fields are separated by zones, this part tracks that
-                    pixel_to_object_mapping = np.load(
-                        os.path.join(
-                            self.folder,
-                            "INSTANCE_ANNOTATIONS",
-                            "ZONES_{}.npy".format(id_patch),
-                        )
+                )
+                # even though instance ids track each field, sometimes those fields are separated by zones, this part tracks that
+                pixel_to_object_mapping = np.load(
+                    os.path.join(
+                        self.folder,
+                        "INSTANCE_ANNOTATIONS",
+                        "ZONES_{}.npy".format(id_patch),
                     )
+                )
 
-                    pixel_semantic_annotation = np.load(
-                        os.path.join(
-                            self.folder, "ANNOTATIONS", "TARGET_{}.npy".format(id_patch)
-                        )
+                pixel_semantic_annotation = np.load(
+                    os.path.join(
+                        self.folder, "ANNOTATIONS", "TARGET_{}.npy".format(id_patch)
                     )
+                )
 
-                    if self.class_mapping is not None:
-                        pixel_semantic_annotation = self.class_mapping(
-                            pixel_semantic_annotation[0]
-                        )
-                    else:
-                        pixel_semantic_annotation = pixel_semantic_annotation[0]
+                if self.class_mapping is not None:
+                    pixel_semantic_annotation = self.class_mapping(
+                        pixel_semantic_annotation[0]
+                    )
+                else:
+                    pixel_semantic_annotation = pixel_semantic_annotation[0]
 
-                    # create two canvases
-                    size = np.zeros((*instance_ids.shape, 2))
-                    object_semantic_annotation = np.zeros(instance_ids.shape)
-                    for instance_id in np.unique(instance_ids):
-                        if instance_id != 0:
-                            h = (instance_ids == instance_id).any(axis=-1).sum()
-                            w = (instance_ids == instance_id).any(axis=-2).sum()
-                            size[pixel_to_object_mapping == instance_id] = (h, w)
-                            object_semantic_annotation[
-                                pixel_to_object_mapping == instance_id
-                            ] = pixel_semantic_annotation[instance_ids == instance_id][
-                                0
-                            ]
-                    # merge every layer
-                    target = torch.from_numpy(
-                        np.concatenate(
-                            [
-                                heatmap[:, :, None],  # 0
-                                instance_ids[:, :, None],  # 1
-                                pixel_to_object_mapping[:, :, None],  # 2
-                                size,  # 3-4
-                                object_semantic_annotation[:, :, None],  # 5
-                                pixel_semantic_annotation[:, :, None],  # 6
-                            ],
-                            axis=-1,
-                        )
-                    ).float()
+                # create two canvases
+                size = np.zeros((*instance_ids.shape, 2))
+                object_semantic_annotation = np.zeros(instance_ids.shape)
+                for instance_id in np.unique(instance_ids):
+                    if instance_id != 0:
+                        h = (instance_ids == instance_id).any(axis=-1).sum()
+                        w = (instance_ids == instance_id).any(axis=-2).sum()
+                        size[pixel_to_object_mapping == instance_id] = (h, w)
+                        object_semantic_annotation[
+                            pixel_to_object_mapping == instance_id
+                        ] = pixel_semantic_annotation[instance_ids == instance_id][
+                            0
+                        ]
+                # merge every layer
+                target = torch.from_numpy(
+                    np.concatenate(
+                        [
+                            heatmap[:, :, None],  # 0
+                            instance_ids[:, :, None],  # 1
+                            pixel_to_object_mapping[:, :, None],  # 2
+                            size,  # 3-4
+                            object_semantic_annotation[:, :, None],  # 5
+                            pixel_semantic_annotation[:, :, None],  # 6
+                        ],
+                        axis=-1,
+                    )
+                ).float()
 
             # faster training trick, we save loaded images into our RAM, we take processed image and 7 layers ground truth and put them into our dict self.memory
             if self.cache:
@@ -346,6 +354,18 @@ class Pastis_Dataset(tdata.Dataset):
                 self.memory_dates[id_patch] = dates
         else:
             dates = self.memory_dates[id_patch]
+
+        if self.mono_date is not None:
+            if isinstance(self.mono_date, int):
+                data = {s: data[s][self.mono_date].unsqueeze(0) for s in self.sats}
+                dates = {s: dates[s][self.mono_date] for s in self.sats}
+            else:
+                mono_delta = (self.mono_date - self.reference_date).days
+                mono_date = {
+                    s: int((dates[s] - mono_delta).abs().argmin()) for s in self.sats
+                }
+                data = {s: data[s][mono_date[s]].unsqueeze(0) for s in self.sats}
+                dates = {s: dates[s][mono_date[s]] for s in self.sats}
 
         if self.mem16:
             data = {k: v.float() for k, v in data.items()}

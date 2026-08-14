@@ -11,10 +11,10 @@ np_str_obj_array_pattern = re.compile(r"[SaUO]")
 we have a problem: our pytorch dataloader grabs random tensors and tries to glue them together to get one batch
 but our tensors [time, channels, height, width] have different time series sequences, meaning one territory
 can have 48 images taken throught the year and another may have 27, pytorch needs to have same dimensions across all tensors
-we are trying to make one batch of 
+we are trying to make one batch of
 
-we implemented dynamic padding, which means we first measure the logest time series dimension in the current batch (pad_collate func)
-and then check whether others are align with it, if no we pad them with zeroes (pad_tensor)
+we implemented dynamic padding, which means we first measure the longest time series dimension in the current batch (pad_collate func)
+and then check whether others align with it, if no we pad them with zeroes (pad_tensor)
 
 in the end we output 5D tensor (batch, time, channels, height, width)
 """
@@ -38,8 +38,8 @@ def pad_collate(batch, pad_value=0):
                 batch = [pad_tensor(e, m, pad_value=pad_value) for e in batch]
         if torch.utils.data.get_worker_info() is not None:
             numel = sum([x.numel() for x in batch])
-            storage = elem.storage()._new_shared(numel)
-            out = elem.new(storage)
+            storage = elem._typed_storage()._new_shared(numel, device=elem.device)
+            out = elem.new(storage).resize_(len(batch), *list(batch[0].size()))
         return torch.stack(batch, 0, out=out)
     elif (
         elem_type.__module__ == "numpy"

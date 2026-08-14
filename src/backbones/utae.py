@@ -20,7 +20,7 @@ we take encoders output of that size we are trying to upscale to back, and glue 
 import torch
 import torch.nn as nn
 
-from ltae import LTAE2d
+from src.backbones.ltae import LTAE2d
 
 
 class UTAE(nn.Module):

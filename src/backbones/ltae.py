@@ -1,7 +1,7 @@
 """
 L-TAE lightweight temporal attention encoder, core brain of U-TAE model
 it looks at all the images taken throughout the year of one territory,
-and summarizes them into one sinegle master feature image.
+and summarizes them into one single master feature image.
 
 we use attention mechanism to find clues in each pixel. for example: for this
 specific pixel, the photos from april 12th and june 4th are the most important
@@ -9,10 +9,10 @@ clues to figure out what crop this is and ignore the cloudy photo from march.
 
 
 now to the architecture explanation:
-let's assume we have three images 2x2, one channel, and we took three of them over the year
+let's assume we have one territory, one channel, and we took three images of it throughout the year
 
          DAY 1                  DAY 2                  DAY 3
-     (early spring)            (cloudy)            (sate summer)
+     (early spring)            (cloudy)            (late summer)
 
     Pixel A  Pixel B       Pixel A  Pixel B       Pixel A  Pixel B
    [  10   |  12   ]      [  95   |  99   ]      [  45   |  40   ]
@@ -51,10 +51,10 @@ how the model will understand that cloudy images needs to be ignored?
 imagine we have three images over uzbekistan of completly different territories,
 image 1 (wheat), in may cloud covers the field, the value is 99, ground thruth says this is wheat
 image 2 (cotton), in july cloud covers the field, the value is 99, ground thruth says this is cotton
-image 3 (alfalfa), in august cloud covers the field, the value is 99, ground thrith says this is alfalfa
+image 3 (alfalfa), in august cloud covers the field, the value is 99, ground truth says this is alfalfa
 
 once the model learn 99 is wheat and then tries to predict that, our metrics will punish the model,
-and it will always be punished, until model learns that value 99 appears randomly across all teh fields,
+and it will always be punished, until model learns that value 99 appears randomly across all the fields,
 it needs to ignore those high spikes in images to pass the "test"
 """
 
@@ -64,7 +64,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from positional_encoding import PositionalEncoder
+from src.backbones.positional_encoding import PositionalEncoder
 
 
 class LTAE2d(nn.Module):
@@ -134,7 +134,7 @@ class LTAE2d(nn.Module):
                 .repeat((1, 1, h))
                 .unsqueeze(-1)
                 .repeat((1, 1, 1, w))
-            )  # BxTxHxW
+            )
             pad_mask = (
                 pad_mask.permute(0, 2, 3, 1).contiguous().view(sz_b * h * w, seq_len)
             )
@@ -151,22 +151,18 @@ class LTAE2d(nn.Module):
                 .repeat((1, 1, h))
                 .unsqueeze(-1)
                 .repeat((1, 1, 1, w))
-            )  # BxTxHxW
+            )
             bp = bp.permute(0, 2, 3, 1).contiguous().view(sz_b * h * w, seq_len)
             out = out + self.positional_encoder(bp)
 
         out, attn = self.attention_heads(out, pad_mask=pad_mask)
 
-        out = (
-            out.permute(1, 0, 2).contiguous().view(sz_b * h * w, -1)
-        )  # Concatenate heads
+        out = out.permute(1, 0, 2).contiguous().view(sz_b * h * w, -1)
         out = self.dropout(self.mlp(out))
         out = self.out_norm(out) if self.out_norm is not None else out
         out = out.view(sz_b, h, w, -1).permute(0, 3, 1, 2)
 
-        attn = attn.view(self.n_head, sz_b, h, w, seq_len).permute(
-            0, 1, 4, 2, 3
-        )  # head x b x t x h x w
+        attn = attn.view(self.n_head, sz_b, h, w, seq_len).permute(0, 1, 4, 2, 3)
 
         if self.return_att:
             return out, attn
@@ -194,12 +190,10 @@ class MultiHeadAttention(nn.Module):
         d_k, d_in, n_head = self.d_k, self.d_in, self.n_head
         sz_b, seq_len, _ = v.size()
 
-        q = torch.stack([self.Q for _ in range(sz_b)], dim=1).view(
-            -1, d_k
-        )  # (n*b) x d_k
+        q = torch.stack([self.Q for _ in range(sz_b)], dim=1).view(-1, d_k)
 
         k = self.fc1_k(v).view(sz_b, seq_len, n_head, d_k)
-        k = k.permute(2, 0, 1, 3).contiguous().view(-1, seq_len, d_k)  # (n*b) x lk x dk
+        k = k.permute(2, 0, 1, 3).contiguous().view(-1, seq_len, d_k)
 
         if pad_mask is not None:
             pad_mask = pad_mask.repeat((n_head, 1))
