@@ -15,12 +15,12 @@ import torch.nn as nn
 import torch.utils.data as data
 
 from src import utils, model_utils
-from src.dataset import PASTIS_Dataset
+from src.dataset import Pastis_Dataset
 
 from train_semantic import iterate, overall_performance, save_results, prepare_output
 
 parser = argparse.ArgumentParser()
-# Model parameters
+# model parameters
 parser.add_argument(
     "--weight_folder",
     type=str,
@@ -91,7 +91,7 @@ def main(config):
             fold = config.fold - 1
 
         # Dataset definition
-        dt_test = PASTIS_Dataset(
+        dt_test = Pastis_Dataset(
             folder=config.dataset_folder,
             norm=True,
             reference_date=config.ref_date,
@@ -104,12 +104,13 @@ def main(config):
         test_loader = data.DataLoader(
             dt_test,
             batch_size=config.batch_size,
-            shuffle=True,
-            drop_last=True,
+            shuffle=False,
+            drop_last=False,
             collate_fn=collate_fn,
+            num_workers=config.num_workers,
         )
 
-        # Load weights
+        # load weights
         sd = torch.load(
             os.path.join(
                 config.weight_folder, "Fold_{}".format(fold + 1), "model.pth.tar"
@@ -118,12 +119,12 @@ def main(config):
         )
         model.load_state_dict(sd["state_dict"])
 
-        # Loss
+        # loss
         weights = torch.ones(config.num_classes, device=device).float()
         weights[config.ignore_index] = 0
         criterion = nn.CrossEntropyLoss(weight=weights)
 
-        # Inference
+        # inference
         print("Testing . . .")
         model.eval()
         test_metrics, conf_mat = iterate(
@@ -142,7 +143,7 @@ def main(config):
                 test_metrics["test_IoU"],
             )
         )
-        save_results(fold + 1, test_metrics, conf_mat.cpu().numpy(), config)
+        save_results(fold + 1, test_metrics, conf_mat, config)
 
     if config.fold is None:
         overall_performance(config)

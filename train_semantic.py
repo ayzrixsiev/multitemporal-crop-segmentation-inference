@@ -57,7 +57,7 @@ parser.add_argument(
     help="Path to the folder where the results should be stored",
 )
 parser.add_argument(
-    "--num_workers", default=8, type=int, help="Number of data loading workers"
+    "--num_workers", default=4, type=int, help="Number of data loading workers"
 )
 parser.add_argument("--rdm_seed", default=1, type=int, help="Random seed")
 parser.add_argument(
@@ -106,9 +106,15 @@ parser.add_argument(
     type=int,
     help="Do validation only after that many epochs.",
 )
+parser.add_argument(
+    "--resume",
+    dest="resume",
+    action="store_true",
+    help="If specified, continue the run already in res_dir instead of starting over",
+)
 
 list_args = ["encoder_widths", "decoder_widths", "out_conv"]
-parser.set_defaults(cache=False)
+parser.set_defaults(cache=False, resume=False)
 
 
 def iterate(
@@ -192,11 +198,67 @@ def checkpoint(fold, log, config):
         json.dump(log, outfile, indent=4)
 
 
+def resume_from(fold, model, optimizer, config):
+    """
+    Not upstream. Reload the state written by save_checkpoint_last() so a killed run
+    can carry on instead of restarting from random weights, which is what Kaggle's
+    12 hour session cap forces you into at 100 epochs.
+
+    Returns (start_epoch, best_mIoU, trainlog). If there is nothing to resume from,
+    returns a fresh start so that --resume is always safe to leave switched on.
+    """
+    fold_dir = os.path.join(config.res_dir, "Fold_{}".format(fold))
+    last_path = os.path.join(fold_dir, "last.pth.tar")
+    log_path = os.path.join(fold_dir, "trainlog.json")
+
+    if not (os.path.exists(last_path) and os.path.exists(log_path)):
+        print("Nothing to resume in {}, starting from scratch.".format(fold_dir))
+        return 1, 0, {}
+
+    state = torch.load(last_path, map_location="cpu")
+    model.load_state_dict(state["state_dict"])
+    optimizer.load_state_dict(state["optimizer"])
+
+    # json turns the integer epoch keys into strings on the way out, so undo that
+    with open(log_path) as file:
+        trainlog = {int(k): v for k, v in json.loads(file.read()).items()}
+
+    start_epoch = state["epoch"] + 1
+    best_mIoU = state["best_mIoU"]
+    print(
+        "Resuming fold {} at epoch {}/{}, best mIoU so far {:.4f}".format(
+            fold, start_epoch, config.epochs, best_mIoU
+        )
+    )
+    return start_epoch, best_mIoU, trainlog
+
+
+def save_checkpoint_last(fold, epoch, best_mIoU, model, optimizer, config):
+    """
+    Not upstream. model.pth.tar only ever holds the *best* epoch, which is the right
+    thing to test with but the wrong thing to resume from -- it would silently throw
+    away every epoch since the last improvement. So keep a separate latest-epoch
+    checkpoint purely for resuming.
+    """
+    torch.save(
+        {
+            "epoch": epoch,
+            "best_mIoU": best_mIoU,
+            "state_dict": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+        },
+        os.path.join(config.res_dir, "Fold_{}".format(fold), "last.pth.tar"),
+    )
+
+
 def save_results(fold, metrics, conf_mat, config):
     with open(
         os.path.join(config.res_dir, "Fold_{}".format(fold), "test_metrics.json"), "w"
     ) as outfile:
         json.dump(metrics, outfile, indent=4)
+
+    if torch.is_tensor(conf_mat):
+        conf_mat = conf_mat.cpu().numpy()
     pkl.dump(
         conf_mat,
         open(
@@ -317,7 +379,12 @@ def main(config):
         # Training loop
         trainlog = {}
         best_mIoU = 0
-        for epoch in range(1, config.epochs + 1):
+        start_epoch = 1
+        if config.resume:
+            start_epoch, best_mIoU, trainlog = resume_from(
+                fold + 1, model, optimizer, config
+            )
+        for epoch in range(start_epoch, config.epochs + 1):
             print("EPOCH {}/{}".format(epoch, config.epochs))
 
             model.train()
@@ -369,6 +436,8 @@ def main(config):
                 trainlog[epoch] = {**train_metrics}
                 checkpoint(fold + 1, trainlog, config)
 
+            save_checkpoint_last(fold + 1, epoch, best_mIoU, model, optimizer, config)
+
         print("Testing best epoch . . .")
         model.load_state_dict(
             torch.load(
@@ -395,7 +464,7 @@ def main(config):
                 test_metrics["test_IoU"],
             )
         )
-        save_results(fold + 1, test_metrics, conf_mat.cpu().numpy(), config)
+        save_results(fold + 1, test_metrics, conf_mat, config)
 
     if config.fold is None:
         overall_performance(config)

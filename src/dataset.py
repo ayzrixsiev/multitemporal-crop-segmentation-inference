@@ -8,6 +8,28 @@ import pandas as pd
 import torch
 import torch.utils.data as tdata
 
+"""
+pytorch dataset to load data from pastis, for semantic and instance segmentation
+our input is 4D tensors (time, channels, height, width) and
+dataset outputs the following tumple: ((data, dates), target)
+    args:
+        folder (str): path to the dataset
+        norm (bool): if true, images are standardised using pre-computed
+            channel-wise means and standard deviations.
+        reference_date (str, Format : 'YYYY-MM-DD'): it is used for temporal attention layer.
+        target (str): 'semantic' or 'instance', defines which type of target is.
+            returned by the dataloader.
+        cache (bool): if true we save intially loaded images in ram for faster access (created a variable).
+        mem16 (bool): additional argument for cache, if True, the image time
+            series tensors are stored in half precision in RAM for efficiency.
+            they are cast back to float32 when returned by __getitem__.
+        folds (list, optional): List of ints specifying which of the 5 official
+            folds to load. By default (when None is specified) all folds are loaded.
+        class_mapping (dict, optional): to create grouping of classes, we can change the ID assigned to a ceratin crop
+            and assign it to another, for example.
+        sats (list): defines the satellites to use (Sentinel-2)
+"""
+
 
 class Pastis_Dataset(tdata.Dataset):
     def __init__(
@@ -23,27 +45,6 @@ class Pastis_Dataset(tdata.Dataset):
         mono_date=None,
         sats=["S2"],
     ):
-        """
-        pytorch dataset to load data from pastis, for semantic and instance segmentation
-        our input is 4D tensors (time, channels, height, width) and
-        dataset outputs the following tumple: ((data, dates), target)
-        args:
-            folder (str): path to the dataset
-            norm (bool): if true, images are standardised using pre-computed
-                channel-wise means and standard deviations.
-            reference_date (str, Format : 'YYYY-MM-DD'): it is used for temporal attention layer.
-            target (str): 'semantic' or 'instance', defines which type of target is.
-                returned by the dataloader.
-            cache (bool): if true we save intially loaded images in ram for faster access (created a variable).
-            mem16 (bool): additional argument for cache, if True, the image time
-                series tensors are stored in half precision in RAM for efficiency.
-                they are cast back to float32 when returned by __getitem__.
-            folds (list, optional): List of ints specifying which of the 5 official
-                folds to load. By default (when None is specified) all folds are loaded.
-            class_mapping (dict, optional): to create grouping of classes, we can change the ID assigned to a ceratin crop
-                and assign it to another, for example.
-            sats (list): defines the satellites to use (Sentinel-2)
-        """
         super(Pastis_Dataset, self).__init__()
         self.folder = folder
         self.norm = norm
@@ -312,9 +313,7 @@ class Pastis_Dataset(tdata.Dataset):
                         size[pixel_to_object_mapping == instance_id] = (h, w)
                         object_semantic_annotation[
                             pixel_to_object_mapping == instance_id
-                        ] = pixel_semantic_annotation[instance_ids == instance_id][
-                            0
-                        ]
+                        ] = pixel_semantic_annotation[instance_ids == instance_id][0]
                 # merge every layer
                 target = torch.from_numpy(
                     np.concatenate(
