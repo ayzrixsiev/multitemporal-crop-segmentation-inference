@@ -1,30 +1,3 @@
-"""
-Build a self-contained HTML report from a finished train_semantic.py run.
-
-This is presentation scaffolding, not part of the U-TAE port -- nothing here is
-transcribed from upstream. It reads what train_semantic.py already writes:
-
-    results/Fold_<N>/trainlog.json      per-epoch train (and val) metrics
-    results/Fold_<N>/test_metrics.json  final test loss / accuracy / mIoU
-    results/Fold_<N>/conf_mat.pkl       20x20 confusion matrix, rows = truth
-    results/conf.json                   the argparse config the run used
-
-and writes a single report/index.html with every image inlined as a data URI, so
-the file can be opened offline, emailed, or dropped straight into a slide.
-
-Usage (from the repo root):
-
-    uv run python scripts/make_report.py --res_dir results --fold 1
-
-Add --dataset_folder and --weights to also render qualitative panels (true-colour
-image, ground truth, prediction) and the L-TAE temporal attention profile:
-
-    uv run python scripts/make_report.py \
-        --res_dir results --fold 1 \
-        --dataset_folder /path/to/PASTIS \
-        --weights results/Fold_1/model.pth.tar
-"""
-
 import argparse
 import base64
 import io
@@ -35,9 +8,6 @@ from datetime import datetime
 
 import numpy as np
 
-# PASTIS nomenclature: 18 crop types + background (0) + void (19).
-# Class 19 is excluded from every metric, matching train_semantic.py's
-# ignore_index=-1 (which indexes the last row/column of the confusion matrix).
 PASTIS_CLASSES = [
     "Background",
     "Meadow",
@@ -61,27 +31,44 @@ PASTIS_CLASSES = [
     "Void",
 ]
 
-# Segmentation maps are the one place this report goes past the ~7-colour ceiling:
-# a land-cover map needs one hue per class and position carries most of the signal.
-# Ground truth and prediction always share this map so the differences pop, and a
-# legend lists only the classes actually present in the panel.
 CLASS_COLORS = [
-    "#f0efec", "#1baf7a", "#2a78d6", "#eda100", "#9085e9",
-    "#e87ba4", "#86b6ef", "#eb6834", "#4a3aa7", "#d55181",
-    "#008300", "#0d366b", "#e34948", "#c98500", "#199e70",
-    "#3987e5", "#184f95", "#d95926", "#6da7ec", "#ffffff",
+    "#f0efec",
+    "#1baf7a",
+    "#2a78d6",
+    "#eda100",
+    "#9085e9",
+    "#e87ba4",
+    "#86b6ef",
+    "#eb6834",
+    "#4a3aa7",
+    "#d55181",
+    "#008300",
+    "#0d366b",
+    "#e34948",
+    "#c98500",
+    "#199e70",
+    "#3987e5",
+    "#184f95",
+    "#d95926",
+    "#6da7ec",
+    "#ffffff",
 ]
 
-# Sequential blue ramp, light -> dark, for continuous magnitude (the heatmap).
 SEQ_BLUE = [
-    "#cde2fb", "#b7d3f6", "#9ec5f4", "#86b6ef", "#6da7ec", "#5598e7",
-    "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b",
+    "#cde2fb",
+    "#b7d3f6",
+    "#9ec5f4",
+    "#86b6ef",
+    "#6da7ec",
+    "#5598e7",
+    "#3987e5",
+    "#2a78d6",
+    "#256abf",
+    "#1c5cab",
+    "#184f95",
+    "#104281",
+    "#0d366b",
 ]
-
-
-# --------------------------------------------------------------------------- #
-# loading
-# --------------------------------------------------------------------------- #
 
 
 def load_run(res_dir, fold):
@@ -133,19 +120,20 @@ def per_class_metrics(conf_mat, ignore_index=-1):
                 {
                     "index": cls,
                     "name": PASTIS_CLASSES[cls],
-                    "iou": float(tp / (tp + fp + fn)) if (tp + fp + fn) else float("nan"),
+                    "iou": (
+                        float(tp / (tp + fp + fn)) if (tp + fp + fn) else float("nan")
+                    ),
                     "precision": float(tp / (tp + fp)) if (tp + fp) else float("nan"),
                     "recall": float(tp / (tp + fn)) if (tp + fn) else float("nan"),
-                    "f1": float(2 * tp / (2 * tp + fp + fn)) if (tp + fp + fn) else float("nan"),
+                    "f1": (
+                        float(2 * tp / (2 * tp + fp + fn))
+                        if (tp + fp + fn)
+                        else float("nan")
+                    ),
                     "support": float(cm[j, :].sum()),
                 }
             )
     return rows, cm
-
-
-# --------------------------------------------------------------------------- #
-# raster panels (matplotlib) -- these are genuinely images, not charts
-# --------------------------------------------------------------------------- #
 
 
 def _png_data_uri(fig):
@@ -199,8 +187,6 @@ def qualitative_panels(dataset_folder, weights, fold, config, n_samples, device)
     model.load_state_dict(state["state_dict"])
     model = model.to(device).eval()
 
-    # Prefer patches with several distinct crop types -- an all-meadow patch is a
-    # dull showcase even when the model nails it.
     scored = []
     for i in range(min(len(dt), 60)):
         _, y = dt[i]
@@ -223,9 +209,7 @@ def qualitative_panels(dataset_folder, weights, fold, config, n_samples, device)
         pred = out.argmax(dim=1)[0].cpu().numpy()
         truth = y.numpy()
 
-        # true-colour composite: undo normalisation, take B4/B3/B2, percentile stretch
         raw = x * std[None, :, None, None] + mean[None, :, None, None]
-        # the least-cloudy frame is a better thumbnail than an arbitrary one
         frame = int(raw.mean(dim=(1, 2, 3)).argmin())
         rgb = raw[frame, [2, 1, 0]].permute(1, 2, 0).numpy()
         lo, hi = np.percentile(rgb, [2, 98])
@@ -243,7 +227,11 @@ def qualitative_panels(dataset_folder, weights, fold, config, n_samples, device)
             images.append({"src": _png_data_uri(fig), "caption": caption})
 
         present = sorted(set(np.unique(truth)) | set(np.unique(pred)))
-        agree = float((pred == truth)[truth != 19].mean() * 100) if (truth != 19).any() else float("nan")
+        agree = (
+            float((pred == truth)[truth != 19].mean() * 100)
+            if (truth != 19).any()
+            else float("nan")
+        )
 
         panels.append(
             {
@@ -265,20 +253,12 @@ def qualitative_panels(dataset_folder, weights, fold, config, n_samples, device)
 
 
 def attention_figure(att, dates, config):
-    """
-    L-TAE returns attention of shape (n_head, B, T, H, W) at the coarsest
-    resolution. Averaging over space gives, per head, how much each acquisition
-    date contributed -- the clearest single picture of what the temporal encoder
-    learned to look at.
-    """
     import matplotlib.pyplot as plt
 
     a = att[:, 0].mean(dim=(-1, -2)).cpu().numpy()  # (n_head, T)
     days = dates.cpu().numpy()
     ref = datetime(*map(int, config.get("ref_date", "2018-09-01").split("-")))
-    labels = [
-        (np.datetime64(ref.date()) + np.timedelta64(int(d), "D")) for d in days
-    ]
+    labels = [(np.datetime64(ref.date()) + np.timedelta64(int(d), "D")) for d in days]
 
     muted = "#898781"
     fig, ax = plt.subplots(figsize=(9.5, 2.9))
@@ -288,10 +268,15 @@ def attention_figure(att, dates, config):
     ax.set_xticks(range(0, len(labels), step))
     ax.set_xticklabels(
         [str(labels[i])[:7] for i in range(0, len(labels), step)],
-        rotation=45, ha="right", fontsize=8, color=muted,
+        rotation=45,
+        ha="right",
+        fontsize=8,
+        color=muted,
     )
     ax.set_yticks([0, a.shape[0] - 1])
-    ax.set_yticklabels(["head 1", "head {}".format(a.shape[0])], fontsize=8, color=muted)
+    ax.set_yticklabels(
+        ["head 1", "head {}".format(a.shape[0])], fontsize=8, color=muted
+    )
     ax.set_xlabel("acquisition date", fontsize=9, color=muted)
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -305,18 +290,7 @@ def attention_figure(att, dates, config):
     return _png_data_uri(fig)
 
 
-# --------------------------------------------------------------------------- #
-# vector charts, rendered server-side as SVG
-# --------------------------------------------------------------------------- #
-
-
 def svg_line_chart(series, y_label, chart_id, y_pct=False):
-    """
-    Two-series line chart. Series are the *entities* train and val, so they get
-    categorical slots 1 and 2 and keep those hues everywhere in the report.
-    Loss and mIoU live in separate charts on purpose -- never two y-scales on one
-    plot. Values are also in the table view further down the page.
-    """
     W, H = 460, 230
     pad = {"t": 14, "r": 16, "b": 34, "l": 46}
     pw, ph = W - pad["l"] - pad["r"], H - pad["t"] - pad["b"]
@@ -340,7 +314,6 @@ def svg_line_chart(series, y_label, chart_id, y_pct=False):
 
     parts = ['<svg viewBox="0 0 {} {}" class="chart" role="img">'.format(W, H)]
 
-    # recessive hairline grid, solid, never dashed
     ticks = [y0 + (y1 - y0) * i / 4 for i in range(5)]
     for t in ticks:
         parts.append(
@@ -367,14 +340,11 @@ def svg_line_chart(series, y_label, chart_id, y_pct=False):
         )
     )
 
-    # Direct end-labels only work while the series stay apart at the right edge.
-    # Loss curves converge, and nudging colliding labels apart detaches them from
-    # their lines -- so when the endpoints are within a label's height, drop the
-    # text and let the legend, the tooltip and the table carry those values.
     end_ys = [py(s["points"][-1][1]) for s in series]
-    labels_fit = len(end_ys) < 2 or min(
-        abs(a - b) for i, a in enumerate(end_ys) for b in end_ys[i + 1 :]
-    ) >= 14
+    labels_fit = (
+        len(end_ys) < 2
+        or min(abs(a - b) for i, a in enumerate(end_ys) for b in end_ys[i + 1 :]) >= 14
+    )
 
     for s in series:
         pts = s["points"]
@@ -389,7 +359,9 @@ def svg_line_chart(series, y_label, chart_id, y_pct=False):
         ex, ey = pts[-1]
         parts.append(
             '<circle cx="{:.1f}" cy="{:.1f}" r="4" fill="var(--{})" '
-            'stroke="var(--surface-1)" stroke-width="2"/>'.format(px(ex), py(ey), s["slot"])
+            'stroke="var(--surface-1)" stroke-width="2"/>'.format(
+                px(ex), py(ey), s["slot"]
+            )
         )
         if labels_fit:
             parts.append(
@@ -398,7 +370,6 @@ def svg_line_chart(series, y_label, chart_id, y_pct=False):
                 )
             )
 
-    # hover layer: one invisible full-height band per epoch
     step = pw / max(len(series[0]["points"]) - 1, 1)
     for i, (x, _) in enumerate(series[0]["points"]):
         vals = []
@@ -409,7 +380,12 @@ def svg_line_chart(series, y_label, chart_id, y_pct=False):
         parts.append(
             '<rect x="{:.1f}" y="{:.1f}" width="{:.1f}" height="{:.1f}" fill="transparent" '
             'class="hit" data-tip="Epoch {} &#8212; {}"/>'.format(
-                px(x) - step / 2, pad["t"], max(step, 6), ph, int(x), " &#183; ".join(vals)
+                px(x) - step / 2,
+                pad["t"],
+                max(step, 6),
+                ph,
+                int(x),
+                " &#183; ".join(vals),
             )
         )
 
@@ -428,11 +404,6 @@ def svg_line_chart(series, y_label, chart_id, y_pct=False):
 
 
 def svg_bar_chart(rows):
-    """
-    Per-class IoU, sorted high to low. Crop types are nominal, so every bar is
-    the same hue -- shading them by value would double-encode bar length and say
-    nothing new. Values are direct-labelled at each tip.
-    """
     rows = [r for r in rows if not np.isnan(r["iou"])]
     rows = sorted(rows, key=lambda r: r["iou"], reverse=True)
 
@@ -456,7 +427,10 @@ def svg_bar_chart(rows):
             '<path d="{}" fill="var(--series-1)" class="hit" data-tip="{} &#8212; '
             'IoU {:.3f} &#183; precision {:.3f} &#183; recall {:.3f}"/>'.format(
                 _bar_path(label_w, y, w, bar_h),
-                _esc(r["name"]), r["iou"], r["precision"], r["recall"],
+                _esc(r["name"]),
+                r["iou"],
+                r["precision"],
+                r["recall"],
             )
         )
         parts.append(
@@ -478,11 +452,6 @@ def _bar_path(x, y, w, h, r=4):
 
 
 def html_confusion(cm, rows):
-    """
-    Row-normalised confusion, truth down the side and prediction across the top.
-    Continuous magnitude, so one hue light-to-dark with a scale legend; the exact
-    numbers stay reachable on hover and in the per-class table.
-    """
     with np.errstate(divide="ignore", invalid="ignore"):
         norm = cm / cm.sum(axis=1, keepdims=True)
     norm = np.nan_to_num(norm)
@@ -498,7 +467,11 @@ def html_confusion(cm, rows):
         cells = []
         for j in range(n):
             v = norm[i, j]
-            step = SEQ_BLUE[min(int(v * len(SEQ_BLUE)), len(SEQ_BLUE) - 1)] if v > 0 else "transparent"
+            step = (
+                SEQ_BLUE[min(int(v * len(SEQ_BLUE)), len(SEQ_BLUE) - 1)]
+                if v > 0
+                else "transparent"
+            )
             cells.append(
                 '<td class="cm-cell hit" style="background:{}" '
                 'data-tip="truth {} &#8594; predicted {}: {:.1%} ({:,.0f} px)"></td>'.format(
@@ -506,12 +479,12 @@ def html_confusion(cm, rows):
                 )
             )
         body.append(
-            '<tr><th class="cm-row">{}</th>{}</tr>'.format(_esc(names[i]), "".join(cells))
+            '<tr><th class="cm-row">{}</th>{}</tr>'.format(
+                _esc(names[i]), "".join(cells)
+            )
         )
 
-    scale = "".join(
-        '<i style="background:{}"></i>'.format(c) for c in SEQ_BLUE
-    )
+    scale = "".join('<i style="background:{}"></i>'.format(c) for c in SEQ_BLUE)
     return (
         '<div class="cm-scroll"><table class="cm">'
         '<thead><tr><th class="cm-corner"></th>{}</tr></thead>'
@@ -548,9 +521,7 @@ def _fmt(v, pct=False, nd=2):
 
 
 def _esc(s):
-    return (
-        str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    )
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 # --------------------------------------------------------------------------- #
@@ -696,16 +667,31 @@ JS = """
 
 def build_html(trainlog, test_metrics, conf_mat, config, panels, attention, fold):
     epochs = sorted(trainlog)
-    train_loss = [(e, trainlog[e]["train_loss"]) for e in epochs if "train_loss" in trainlog[e]]
-    val_loss = [(e, trainlog[e]["val_loss"]) for e in epochs if "val_loss" in trainlog[e]]
-    train_iou = [(e, trainlog[e]["train_IoU"]) for e in epochs if "train_IoU" in trainlog[e]]
+    train_loss = [
+        (e, trainlog[e]["train_loss"]) for e in epochs if "train_loss" in trainlog[e]
+    ]
+    val_loss = [
+        (e, trainlog[e]["val_loss"]) for e in epochs if "val_loss" in trainlog[e]
+    ]
+    train_iou = [
+        (e, trainlog[e]["train_IoU"]) for e in epochs if "train_IoU" in trainlog[e]
+    ]
     val_iou = [(e, trainlog[e]["val_IoU"]) for e in epochs if "val_IoU" in trainlog[e]]
 
     best_val = max((v for _, v in val_iou), default=float("nan"))
-    epoch_time = np.mean([trainlog[e]["train_epoch_time"] for e in epochs
-                          if "train_epoch_time" in trainlog[e]]) if epochs else float("nan")
+    epoch_time = (
+        np.mean(
+            [
+                trainlog[e]["train_epoch_time"]
+                for e in epochs
+                if "train_epoch_time" in trainlog[e]
+            ]
+        )
+        if epochs
+        else float("nan")
+    )
 
-    rows, cm = (per_class_metrics(conf_mat) if conf_mat is not None else ([], None))
+    rows, cm = per_class_metrics(conf_mat) if conf_mat is not None else ([], None)
 
     test_iou = test_metrics["test_IoU"] if test_metrics else float("nan")
     test_acc = test_metrics["test_accuracy"] if test_metrics else float("nan")
@@ -714,21 +700,32 @@ def build_html(trainlog, test_metrics, conf_mat, config, panels, attention, fold
     if train_loss:
         charts.append(
             svg_line_chart(
-                [
-                    {"points": train_loss, "slot": "series-1", "label": "Train"},
-                    {"points": val_loss, "slot": "series-2", "label": "Validation"},
-                ] if val_loss else [{"points": train_loss, "slot": "series-1", "label": "Train"}],
-                "Cross-entropy loss", "loss",
+                (
+                    [
+                        {"points": train_loss, "slot": "series-1", "label": "Train"},
+                        {"points": val_loss, "slot": "series-2", "label": "Validation"},
+                    ]
+                    if val_loss
+                    else [{"points": train_loss, "slot": "series-1", "label": "Train"}]
+                ),
+                "Cross-entropy loss",
+                "loss",
             )
         )
     if train_iou:
         charts.append(
             svg_line_chart(
-                [
-                    {"points": train_iou, "slot": "series-1", "label": "Train"},
-                    {"points": val_iou, "slot": "series-2", "label": "Validation"},
-                ] if val_iou else [{"points": train_iou, "slot": "series-1", "label": "Train"}],
-                "mIoU (%)", "miou", y_pct=True,
+                (
+                    [
+                        {"points": train_iou, "slot": "series-1", "label": "Train"},
+                        {"points": val_iou, "slot": "series-2", "label": "Validation"},
+                    ]
+                    if val_iou
+                    else [{"points": train_iou, "slot": "series-1", "label": "Train"}]
+                ),
+                "mIoU (%)",
+                "miou",
+                y_pct=True,
             )
         )
 
@@ -795,7 +792,9 @@ def build_html(trainlog, test_metrics, conf_mat, config, panels, attention, fold
             "acquisition, averaged over the patch. This is the part that makes U-TAE more than "
             "a U-Net: the heads learn to concentrate on the dates that separate crops and to "
             "walk away from clouded ones.</p>"
-            '<div class="card wide"><img src="{}" alt="Temporal attention by head and date"></div>'.format(attention)
+            '<div class="card wide"><img src="{}" alt="Temporal attention by head and date"></div>'.format(
+                attention
+            )
         )
 
     if rows:
@@ -809,7 +808,9 @@ def build_html(trainlog, test_metrics, conf_mat, config, panels, attention, fold
     cmd = (
         "uv run python train_semantic.py --dataset_folder &lt;PASTIS&gt; --fold {} "
         "--epochs {} --batch_size {} --lr {}".format(
-            fold, config.get("epochs", "?"), config.get("batch_size", "?"),
+            fold,
+            config.get("epochs", "?"),
+            config.get("batch_size", "?"),
             config.get("lr", "?"),
         )
     )
@@ -865,10 +866,16 @@ def main():
     p.add_argument("--res_dir", default="./results")
     p.add_argument("--fold", default=1, type=int)
     p.add_argument("--out", default="./report/index.html")
-    p.add_argument("--dataset_folder", default=None,
-                   help="PASTIS root. Needed for the qualitative and attention panels.")
-    p.add_argument("--weights", default=None,
-                   help="Checkpoint. Defaults to <res_dir>/Fold_<n>/model.pth.tar")
+    p.add_argument(
+        "--dataset_folder",
+        default=None,
+        help="PASTIS root. Needed for the qualitative and attention panels.",
+    )
+    p.add_argument(
+        "--weights",
+        default=None,
+        help="Checkpoint. Defaults to <res_dir>/Fold_<n>/model.pth.tar",
+    )
     p.add_argument("--n_samples", default=3, type=int)
     p.add_argument("--device", default="cuda")
     args = p.parse_args()
@@ -888,7 +895,9 @@ def main():
     else:
         print("No --dataset_folder given: skipping qualitative and attention panels.")
 
-    html = build_html(trainlog, test_metrics, conf_mat, config, panels, attention, args.fold)
+    html = build_html(
+        trainlog, test_metrics, conf_mat, config, panels, attention, args.fold
+    )
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
