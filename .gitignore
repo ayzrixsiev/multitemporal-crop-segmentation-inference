@@ -19,6 +19,7 @@ data/
 .ipynb_checkpoints/
 .DS_Store
 
+/samples/
 webapp/samples/*
 !webapp/samples/.gitkeep
 *.npz

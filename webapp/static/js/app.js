@@ -3,18 +3,23 @@
  */
 
 import { Viewer, loadImage, toGrayArray } from "./viewer.js";
-import { ndviChart, attentionChart, headsStrip } from "./charts.js";
+import { attentionChart, headsStrip } from "./charts.js";
 import { PatchMap } from "./map.js";
 
 const $ = (id) => document.getElementById(id);
 
-const LAYERS = [
-  { key: "pred",  name: "Prediction",   note: "model" },
+// Three ways of looking at the same patch. Only one at a time -- that is the
+// whole point, and stacking them was what made "Mistakes" bleed into the
+// ground-truth view.
+const VIEWS = [
+  { key: "pred",  name: "Prediction",   note: "model", needs: "pred" },
   { key: "truth", name: "Ground truth", note: "dataset", needs: "truth" },
   { key: "error", name: "Mistakes",     note: "pred ≠ truth", needs: "error" },
-  { key: "conf",  name: "Uncertainty",  note: "doubt glows red" },
-  { key: "att",   name: "Attention",    note: "for this date" },
+  { key: "none",  name: "Image only",   note: "no overlay" },
 ];
+
+const PLAY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z"/></svg>';
+const PAUSE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>';
 
 const S = {
   status: null,
@@ -26,8 +31,7 @@ const S = {
   activeSample: null,
   samples: [],
   groups: [],
-  filter: "all",
-  bench: null,
+  filter: "1",
 };
 
 /* ───────────────────────────  helpers  ─────────────────────────── */
@@ -46,9 +50,9 @@ function busy(on, label) {
   if (label) $("busy-label").textContent = label;
 }
 
-function chip(label, value, cls = "", unit = "") {
-  const d = document.createElement("div");
-  d.className = "run-chip " + cls;
+function stat(label, value, cls = "", unit = "") {
+  const d = document.createElement("span");
+  d.className = "stat " + cls;
   d.innerHTML = `<label></label><b><span></span><small></small></b>`;
   d.querySelector("label").textContent = label;
   d.querySelector("span").textContent = value;
@@ -72,22 +76,23 @@ async function boot() {
   S.status = status;
   S.classes = status.classes;
 
-  const strip = $("run-strip");
-  strip.textContent = "";
+  const bar = $("statbar");
+  bar.querySelectorAll(".stat").forEach((e) => e.remove());
+
   if (status.model_loaded) {
     const run = status.run;
     const test = run.test_metrics || {};
     if (test.test_accuracy !== undefined)
-      strip.appendChild(chip("Accuracy", fmt(test.test_accuracy, 0), "hero", "%"));
+      bar.appendChild(stat("Accuracy", fmt(test.test_accuracy, 0), "hero", "%"));
     if (test.test_IoU !== undefined) {
-      // test_IoU is stored as a percentage already; older runs wrote a fraction.
+      // test_IoU is written as a percentage; older runs wrote a fraction.
       const iou = test.test_IoU < 1 ? test.test_IoU * 100 : test.test_IoU;
-      strip.appendChild(chip("mIoU", fmt(iou, 0), "hero"));
+      bar.appendChild(stat("mIoU", fmt(iou, 0), "hero"));
     }
-    strip.appendChild(chip("Params", run.n_params.toLocaleString()));
-    strip.appendChild(chip("Device", run.device));
+    bar.appendChild(stat("Parameters", run.n_params.toLocaleString()));
+    bar.appendChild(stat("Device", run.device));
   } else {
-    strip.appendChild(chip("Model", "not loaded", "bad"));
+    bar.appendChild(stat("Model", "not loaded", "bad"));
     toast(status.error || "No checkpoint found.", true);
   }
 
@@ -119,7 +124,6 @@ async function loadSamples() {
 
   buildGroupTabs();
   renderSampleList();
-  $("bench-card").hidden = S.groups.length < 2;
 
   // The address bar remembers which patch is open, so a link to a particular
   // one can be shared or reloaded and land on the same view.
@@ -141,9 +145,8 @@ function buildGroupTabs() {
   }
   seg.hidden = false;
 
-  const tabs = [{ id: "all", label: "All" }].concat(
-    S.groups.map((g) => ({ id: String(g.id), label: g.label }))
-  );
+  const tabs = S.groups.map((g) => ({ id: String(g.id), label: g.label }));
+  if (!tabs.some((x) => x.id === S.filter)) S.filter = tabs[0].id;
   for (const tab of tabs) {
     const b = document.createElement("button");
     b.className = "seg-btn" + (S.filter === tab.id ? " is-on" : "");
@@ -163,9 +166,8 @@ function setFilter(id, redraw) {
 }
 
 function visibleSamples() {
-  return S.filter === "all"
-    ? S.samples
-    : S.samples.filter((s) => String(s.group) === S.filter);
+  const mine = S.samples.filter((s) => String(s.group) === S.filter);
+  return mine.length ? mine : S.samples;
 }
 
 function renderSampleList() {
@@ -259,10 +261,10 @@ async function present(p) {
   };
 
   S.result = p;
+  stopPlay();
   S.viewer.setData(data);
-  S.viewer.state.layers.truth = false;
-  S.viewer.state.layers.pred = true;
-  S.viewer.state.layers.error = false;
+  S.viewer.state.mode = "pred";
+  S.viewer.state.uncertainty = false;
   S.viewer.state.solo = null;
 
   $("empty-state").hidden = true;
@@ -300,23 +302,41 @@ function buildLayerList() {
   const host = $("layer-list");
   host.textContent = "";
   const p = S.result;
-  for (const def of LAYERS) {
-    const li = document.createElement("li");
-    const on = S.viewer ? S.viewer.state.layers[def.key] : false;
+  const v = S.viewer;
+
+  for (const def of VIEWS) {
     const missing = def.needs && p && !p.layers.includes(def.needs);
+    const on = v ? v.state.mode === def.key : def.key === "pred";
+    const li = document.createElement("li");
     li.className =
       "layer " + (on ? "is-on" : "is-off") + (missing || !p ? " is-disabled" : "");
-    li.innerHTML = `<span class="switch"></span>
+    li.innerHTML = `<span class="radio"></span>
       <span class="layer-name"></span><span class="layer-note"></span>`;
     li.querySelector(".layer-name").textContent = def.name;
     li.querySelector(".layer-note").textContent = missing ? "no labels" : def.note;
     li.addEventListener("click", () => {
-      S.viewer.toggleLayer(def.key, !S.viewer.state.layers[def.key]);
+      v.set("mode", def.key);
       buildLayerList();
       positionWipe();
     });
     host.appendChild(li);
   }
+
+  const sep = document.createElement("li");
+  sep.className = "layer-sep";
+  host.appendChild(sep);
+
+  const on = v ? v.state.uncertainty : false;
+  const li = document.createElement("li");
+  li.className = "layer " + (on ? "is-on" : "is-off") + (p ? "" : " is-disabled");
+  li.innerHTML = `<span class="switch"></span>
+    <span class="layer-name">Uncertainty</span><span class="layer-note">pink = unsure</span>`;
+  li.addEventListener("click", () => {
+    v.set("uncertainty", !v.state.uncertainty);
+    buildLayerList();
+    positionWipe();
+  });
+  host.appendChild(li);
 }
 
 function buildLegend() {
@@ -384,14 +404,12 @@ function buildKpis() {
   const o = S.result.overall;
 
   if (S.result.has_truth) {
-    host.appendChild(kpi("Pixel accuracy", fmt(o.accuracy, 1), "%", true, o.accuracy));
-    host.appendChild(kpi("mIoU here", fmt(o.miou, 1), "%", false, o.miou));
+    host.appendChild(kpi("Accuracy", fmt(o.accuracy, 1), "%", true, o.accuracy));
   } else {
-    host.appendChild(kpi("Crops found", o.classes_found, "", true));
-    host.appendChild(kpi("Mapped area", fmt(o.labelled_area_ha, 0), "ha"));
+    host.appendChild(kpi("Mapped area", fmt(o.labelled_area_ha, 0), "ha", true));
   }
   host.appendChild(kpi("Confidence", fmt(o.mean_confidence, 1), "%", false, o.mean_confidence));
-  host.appendChild(kpi("Fields", o.total_fields, "", false));
+  host.appendChild(kpi("Crops found", o.classes_found, ""));
 }
 
 function buildNotes() {
@@ -411,13 +429,6 @@ function buildNotes() {
     d.textContent =
       "No ground truth in this bundle, so accuracy and IoU cannot be measured — " +
       "only what the model thinks it sees.";
-    host.appendChild(d);
-  } else if (p.overall.void_share > 0.5) {
-    const d = document.createElement("div");
-    d.className = "note info";
-    d.textContent =
-      `${fmt(p.overall.void_share, 1)}% of this patch is marked "void" in the dataset. ` +
-      "Those pixels are left out of every score.";
     host.appendChild(d);
   }
   const cloudCount = (p.cloudy || []).filter(Boolean).length;
@@ -467,12 +478,6 @@ function buildTable() {
 
 function buildCharts(frame) {
   const p = S.result;
-  ndviChart($("ndvi-chart"), {
-    dates: p.dates,
-    series: p.ndvi_series,
-    classes: S.classes,
-    frame,
-  });
   const heads = p.attention_time;
   const mean = heads[0].map((_, i) =>
     heads.reduce((sum, h) => sum + h[i], 0) / heads.length
@@ -485,52 +490,6 @@ function buildCharts(frame) {
     onPick: setFrame,
   });
   headsStrip($("att-heads"), { heads, frame });
-}
-
-/* ─────────  scoring both groups at once  ───────── */
-
-async function runBenchmark() {
-  const btn = $("bench-btn");
-  btn.disabled = true;
-  btn.textContent = "Scoring…";
-  try {
-    const res = await fetch("/api/benchmark", { method: "POST" });
-    if (!res.ok) throw new Error((await res.json()).detail || "failed");
-    S.bench = await res.json();
-    renderBenchmark();
-    btn.textContent = "Score again";
-  } catch (e) {
-    toast(e.message, true);
-    btn.textContent = "Score every patch";
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function renderBenchmark() {
-  const host = $("bench-out");
-  host.textContent = "";
-  const b = S.bench;
-  if (!b || !b.groups.length) return;
-
-  const wrap = document.createElement("div");
-  wrap.className = "bench";
-
-  for (const g of b.groups) {
-    const row = document.createElement("div");
-    row.className = "bench-row";
-    row.innerHTML = `
-      <span class="who"><b></b><span></span></span>
-      <span class="stat"><b></b><label>accuracy</label></span>
-      <span class="stat"><b></b><label>mIoU</label></span>`;
-    row.querySelector(".who b").textContent = g.label;
-    row.querySelector(".who span").textContent = `${g.n} patches`;
-    const stats = row.querySelectorAll(".stat b");
-    stats[0].textContent = fmt(g.accuracy, 1) + "%";
-    stats[1].textContent = fmt(g.miou, 1);
-    wrap.appendChild(row);
-  }
-  host.appendChild(wrap);
 }
 
 async function showMap() {
@@ -651,17 +610,35 @@ function setFrame(i) {
   positionWipe();
 }
 
+function stopPlay() {
+  if (S.playing) clearInterval(S.playing);
+  S.playing = null;
+  const btn = $("play-btn");
+  btn.classList.remove("is-on");
+  btn.title = "Play the year";
+  btn.innerHTML = PLAY_ICON;
+}
+
 function togglePlay() {
-  if (S.playing) {
-    clearInterval(S.playing);
-    S.playing = null;
-    $("play-btn").classList.remove("is-on");
-    return;
-  }
+  if (S.playing) return stopPlay();
   if (!S.result) return;
-  $("play-btn").classList.add("is-on");
+
+  // Sitting on the last date? Start over rather than doing nothing.
+  if (Number($("date-slider").value) >= S.result.n_dates - 1) setFrame(0);
+
+  const btn = $("play-btn");
+  btn.classList.add("is-on");
+  btn.title = "Pause";
+  btn.innerHTML = PAUSE_ICON;
+
   S.playing = setInterval(() => {
-    const next = (Number($("date-slider").value) + 1) % S.result.n_dates;
+    const next = Number($("date-slider").value) + 1;
+    if (next >= S.result.n_dates) {
+      // One pass through the year, then it stops on the final image.
+      setFrame(S.result.n_dates - 1);
+      stopPlay();
+      return;
+    }
     setFrame(next);
   }, 320);
 }
@@ -670,9 +647,7 @@ function togglePlay() {
 
 function positionWipe() {
   const handle = $("wipe-handle");
-  const anyOverlay =
-    S.viewer && Object.values(S.viewer.state.layers).some(Boolean);
-  if (!S.result || !S.viewer.state.compare || !anyOverlay) {
+  if (!S.result || !S.viewer.state.compare || !S.viewer.hasOverlay()) {
     handle.hidden = true;
     return;
   }
@@ -742,8 +717,6 @@ function wireControls() {
     S.viewer.set("grid", on);
     e.currentTarget.classList.toggle("is-on", on);
   });
-
-  $("bench-btn").addEventListener("click", runBenchmark);
 
   wireWipe();
   wireProbe();

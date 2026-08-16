@@ -142,12 +142,12 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dataset_folder", required=True)
     p.add_argument("--fold", default=1, type=int, help="Which trained fold this is for")
-    p.add_argument("--n", default=4, type=int, help="Patches per group")
+    p.add_argument("--n", default=10, type=int, help="Patches per group")
     p.add_argument("--out", default="./samples")
     p.add_argument("--seed", default=7, type=int)
     p.add_argument(
         "--pool",
-        default=70,
+        default=120,
         type=int,
         help="How many candidates to inspect per group before picking the most varied",
     )

@@ -30,8 +30,6 @@ def get_model(config, mode="semantic"):
             )
         return model
     elif mode == "panoptic":
-        # imported here and not at module level so that the semantic track never has to
-        # have torch_scatter installed (src/panoptic/paps.py imports it at its top)
         from src.panoptic import paps
 
         if config.backbone == "utae":

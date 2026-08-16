@@ -296,6 +296,12 @@ def compute_stats(pred, conf, truth, min_field_px=4):
     cm = _confusion(pred, truth) if truth is not None else None
     per_class = []
     for c in range(NUM_CLASSES):
+        # Void never appears in a score. train_semantic.py zeroes its loss weight
+        # (`weights[config.ignore_index] = 0`, and -1 indexes the last class) and
+        # deletes its row and column from the confusion matrix before computing
+        # mIoU, so leaving it in here would not match the reported test number.
+        if c == VOID_CLASS:
+            continue
         n_px = int(counts[c])
         if n_px == 0 and (cm is None or cm[c].sum() == 0):
             continue
@@ -343,31 +349,15 @@ def compute_stats(pred, conf, truth, min_field_px=4):
     return per_class, overall, cm
 
 
-def ndvi_series(raw, pred, per_class, top_n=5):
-    """Average greenness over time, split by predicted crop.
+def ndvi_map(raw):
+    """Greenness for every date: near-infrared against red, pixel by pixel.
 
-    NDVI compares near-infrared light to red light. Healthy leaves bounce back a
-    lot of infrared and swallow red, so a growing crop scores high and bare soil
-    scores low. Plotting it date by date shows each crop's growing season, which
-    is exactly the signal the model uses to tell them apart.
+    Healthy leaves bounce back a lot of infrared and swallow red, so a growing
+    crop scores high and bare soil scores low. Used to draw the greenness view.
     """
     nir = raw[:, NIR_BAND].astype(np.float32)
     red = raw[:, RED_BAND].astype(np.float32)
-    ndvi = (nir - red) / np.clip(nir + red, 1e-6, None)
-
-    series = []
-    for entry in per_class[:top_n]:
-        c = entry["class_id"]
-        if c == VOID_CLASS or entry["pixels"] < 20:
-            continue
-        mask = pred == c
-        series.append(
-            {
-                "class_id": c,
-                "values": [round(float(v), 4) for v in ndvi[:, mask].mean(axis=1)],
-            }
-        )
-    return series, ndvi
+    return (nir - red) / np.clip(nir + red, 1e-6, None)
 
 
 def cloud_flags(raw):
@@ -464,35 +454,6 @@ def encode_map(arr):
 
 
 @torch.no_grad()
-def score_only(bundle, sample):
-    """Accuracy and mIoU for one patch, and nothing else.
-
-    Used when scoring a whole group: the maps, the charts and the field counting
-    are all thrown away, which is most of the work in `predict`.
-    """
-    if sample.target is None:
-        return None
-    x = torch.from_numpy(sample.normalised()).float().unsqueeze(0).to(bundle.device)
-    d = torch.from_numpy(sample.dates).long().unsqueeze(0).to(bundle.device)
-    logits, _ = bundle.model(x, batch_positions=d, return_att=True)
-    pred = logits.argmax(dim=1)[0].cpu().numpy()
-
-    truth = sample.target
-    valid = truth != VOID_CLASS
-    cm = _confusion(pred, truth)
-    ious = []
-    for c in range(NUM_CLASSES):
-        union = float(cm[c].sum() + cm[:, c].sum() - cm[c, c])
-        if union > 0:
-            ious.append(100.0 * float(cm[c, c]) / union)
-    return {
-        "accuracy": round(float((pred == truth)[valid].mean() * 100), 2),
-        "miou": round(float(np.mean(ious)), 2) if ious else None,
-        "classes": len(ious),
-    }
-
-
-@torch.no_grad()
 def predict(bundle, sample):
     """Run one patch through U-TAE and gather everything worth showing."""
     x = torch.from_numpy(sample.normalised()).float().unsqueeze(0).to(bundle.device)
@@ -507,7 +468,7 @@ def predict(bundle, sample):
     truth = sample.target
 
     per_class, overall, cm = compute_stats(pred, conf, truth)
-    series, ndvi = ndvi_series(sample.raw, pred, per_class)
+    ndvi = ndvi_map(sample.raw)
     scores, cloudy = cloud_flags(sample.raw)
 
     # att is (n_head, B, T, h, w) at the bottleneck resolution. Averaging away
@@ -529,7 +490,6 @@ def predict(bundle, sample):
         "has_truth": truth is not None,
         "per_class": per_class,
         "overall": overall,
-        "ndvi_series": series,
         "cloud_score": scores,
         "cloudy": cloudy,
         "attention_time": [[round(float(v), 6) for v in row] for row in att_time],

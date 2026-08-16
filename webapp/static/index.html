@@ -1,29 +1,18 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CropScope — U-TAE crop segmentation</title>
+<title>U-TAE — crop segmentation</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🌾</text></svg>">
 <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
 
 <header class="topbar">
-  <div class="brand">
-    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="2" y="2" width="20" height="20" rx="4"/>
-      <path d="M7 16c0-4 2.2-7 5-7s5 3 5 7"/>
-      <path d="M12 9V6"/>
-    </svg>
-    <div class="brand-text">
-      <b>CropScope</b>
-      <span>U-TAE · multitemporal crop segmentation</span>
-    </div>
-  </div>
-
-  <div class="run-strip" id="run-strip">
-    <div class="run-chip"><label>Status</label><b id="chip-status">connecting…</b></div>
+  <div class="titlebar" id="statbar">
+    <span class="model-name">U-TAE</span>
+    <span class="stat"><label>Status</label><b id="chip-status">connecting…</b></span>
   </div>
 </header>
 
@@ -70,8 +59,8 @@
         <path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2"/>
       </svg>
       <div>
-        <b>Drop a patch bundle here</b>
-        <span>a <code>.npz</code> from <code>export_samples.py</code>, or a raw PASTIS <code>.npy</code> stack</span>
+        <b>Drop a patch here</b>
+        <span>one year of satellite images</span>
       </div>
       <input type="file" id="file-input" accept=".npz,.npy" hidden>
     </div>
@@ -134,19 +123,13 @@
       <h2>Result</h2>
       <div class="kpi-grid" id="kpis"></div>
       <div class="notes" id="notes"></div>
-    </section>
 
-    <section class="card" id="bench-card" hidden>
-      <h2>Group averages</h2>
-      <p class="hint">Run the model over every patch and average the score for each group.</p>
-      <button class="ghost-btn wide" id="bench-btn">Score every patch</button>
-      <div id="bench-out"></div>
-    </section>
-
-    <section class="card" id="map-card" hidden>
-      <h2>Where on Earth<span class="tag" id="coord-tag"></span></h2>
-      <div id="map"></div>
-      <p class="hint" id="map-hint"></p>
+      <h3 class="sub">Which dates the model used</h3>
+      <p class="hint">U-TAE weighs the year's images against each other. Taller means
+         that date mattered more. Click a bar to jump to it. Each row in the block
+         underneath is one of the 16 attention heads.</p>
+      <div class="chart" id="att-chart"></div>
+      <div class="chart heads" id="att-heads"></div>
     </section>
 
     <section class="card">
@@ -162,20 +145,10 @@
       </div>
     </section>
 
-    <section class="card">
-      <h2>Greenness through the year</h2>
-      <p class="hint">How much infrared light each crop bounces back, date by date.
-         A rising line is a crop growing; a fall is harvest or bare soil.</p>
-      <div class="chart" id="ndvi-chart"></div>
-    </section>
-
-    <section class="card">
-      <h2>Which dates the model used</h2>
-      <p class="hint">U-TAE weighs the year's images against each other. Taller means
-         that date mattered more. Click a bar to jump to it.</p>
-      <div class="chart" id="att-chart"></div>
-      <div class="chart heads" id="att-heads"></div>
-      <p class="hint">Each row above is one of the 16 attention heads.</p>
+    <section class="card" id="map-card" hidden>
+      <h2>Where on Earth<span class="tag" id="coord-tag"></span></h2>
+      <div id="map"></div>
+      <p class="hint" id="map-hint"></p>
     </section>
   </aside>
 </main>

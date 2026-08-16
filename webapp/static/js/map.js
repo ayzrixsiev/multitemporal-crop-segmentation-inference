@@ -78,7 +78,7 @@ export class PatchMap {
       this.layer.addTo(this.map);
     }
     this.frame = L.rectangle(bbox, {
-      color: "#4fd6b8",
+      color: "#0a9d7c",
       weight: 1.5,
       fill: false,
       dashArray: "4 3",

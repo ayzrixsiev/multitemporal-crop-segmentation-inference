@@ -127,9 +127,8 @@ def status():
 def _resolve_sample(name):
     """Turn a manifest entry into an absolute path, refusing to leave samples/.
 
-    Entries look like "group1_trained_on/patch_10005.npz", so plain basename
-    stripping is not enough -- but a path that climbs out with ".." must still
-    be rejected.
+    Entries look like "group1/patch_10005.npz", so plain basename stripping is
+    not enough -- but a path that climbs out with ".." must still be rejected.
     """
     directory = STATE["samples_dir"]
     full = os.path.normpath(os.path.join(directory, name))
@@ -192,67 +191,6 @@ def samples():
                 }
             )
     return {"samples": found, "groups": [], "source": directory}
-
-
-@app.post("/api/benchmark")
-def benchmark():
-    """Score every labelled sample and average by group.
-
-    This is the number that matters when showing the model to someone else: the
-    same network, measured on patches it studied and on patches it has never
-    met. The gap between the two is what says whether it learned or memorised.
-    """
-    bundle = _require_model()
-    manifest, _ = _read_manifest()
-    if not manifest:
-        raise HTTPException(status_code=404, detail="No manifest.json in the samples folder.")
-
-    rows = []
-    for item in manifest.get("samples", []):
-        path = os.path.join(STATE["samples_dir"], item.get("file", ""))
-        if not os.path.exists(path):
-            continue
-        loaded = inference.load_sample(path, name=item.get("name", "sample"))
-        score = inference.score_only(bundle, loaded)
-        if score is None:
-            continue
-        rows.append(
-            {
-                "file": item["file"],
-                "label": item.get("label", item.get("name")),
-                "patch_id": item.get("patch_id"),
-                "group": item.get("group"),
-                "group_label": item.get("group_label"),
-                **score,
-            }
-        )
-
-    groups = []
-    for meta in manifest.get("groups", []):
-        mine = [r for r in rows if r["group"] == meta["id"]]
-        if not mine:
-            continue
-        groups.append(
-            {
-                "id": meta["id"],
-                "label": meta.get("label"),
-                "note": meta.get("note"),
-                "folds": meta.get("folds"),
-                "n": len(mine),
-                "accuracy": round(sum(r["accuracy"] for r in mine) / len(mine), 2),
-                "miou": round(
-                    sum(r["miou"] for r in mine if r["miou"] is not None) / len(mine), 2
-                ),
-            }
-        )
-
-    gap = None
-    if len(groups) == 2:
-        gap = {
-            "accuracy": round(groups[0]["accuracy"] - groups[1]["accuracy"], 2),
-            "miou": round(groups[0]["miou"] - groups[1]["miou"], 2),
-        }
-    return {"rows": rows, "groups": groups, "gap": gap}
 
 
 def _require_model():

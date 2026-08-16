@@ -1,8 +1,8 @@
 /* Canvas compositing.
  *
  * Everything the model produced is a 128x128 grid of numbers. This file turns
- * those grids into one picture: the satellite image underneath, the coloured
- * layers on top, blended at whatever opacity the sliders say.
+ * those grids into one picture: the satellite image underneath, the chosen
+ * view painted on top, blended at whatever opacity the slider says.
  *
  * The work happens on a hidden 128x128 canvas and is then blown up to screen
  * size with smoothing switched off, so every pixel stays a crisp square instead
@@ -10,6 +10,7 @@
  */
 
 const SIZE = 128;
+const VOID = 19; // unlabelled pixels; excluded from every score
 
 export function hexToRgb(hex) {
   const h = hex.replace("#", "");
@@ -59,6 +60,10 @@ export class Viewer {
     this.plain = scratch(); // base image only
     this.mixed = scratch(); // base image + overlays
 
+    // Prediction, ground truth and mistakes are three ways of looking at the
+    // same patch, so only one can be on at a time -- stacking them painted the
+    // red error blobs over the ground truth and made both unreadable.
+    // Uncertainty is separate: it is a glow laid over whichever view is chosen.
     this.state = {
       base: "rgb",
       frame: 0,
@@ -67,7 +72,8 @@ export class Viewer {
       compare: true,
       grid: false,
       wipe: 0.5,
-      layers: { pred: true, truth: false, error: false, conf: false, att: false },
+      mode: "pred", // pred | truth | error | none
+      uncertainty: false,
     };
     this.data = null;
   }
@@ -84,13 +90,9 @@ export class Viewer {
     this.draw();
   }
 
-  toggleLayer(name, on) {
-    this.state.layers[name] = on;
-    // Truth and prediction on top of each other is unreadable, so they take
-    // turns. Use the compare wipe to hold them side by side instead.
-    if (on && name === "pred") this.state.layers.truth = false;
-    if (on && name === "truth") this.state.layers.pred = false;
-    this.draw();
+  /** Is anything at all being drawn over the satellite image? */
+  hasOverlay() {
+    return this.state.mode !== "none" || this.state.uncertainty;
   }
 
   /** Paint the chosen date of the chosen base image into a scratch canvas. */
@@ -112,39 +114,13 @@ export class Viewer {
     const px = img.data;
     const alpha = s.opacity;
 
-    const attFrame = s.layers.att && d.attention ? d.attention[s.frame] : null;
-    const attW = d.attentionShape ? d.attentionShape[1] : 1;
-    const attH = d.attentionShape ? d.attentionShape[0] : 1;
+    const labels = s.mode === "pred" ? d.pred : s.mode === "truth" ? d.truth : null;
+    const errorView = s.mode === "error" && d.error && d.pred && d.truth;
 
     for (let i = 0; i < SIZE * SIZE; i++) {
       const o = i * 4;
       let r = px[o], g = px[o + 1], b = px[o + 2];
 
-      // Uncertainty first, so it sits under the crop colours: the doubtful
-      // places glow through rather than being painted over.
-      if (s.layers.conf && d.conf) {
-        const doubt = 1 - d.conf[i] / 255;
-        if (doubt > 0.25) {
-          const a = Math.min(1, (doubt - 0.25) / 0.55) * alpha;
-          r = r + (232 - r) * a;
-          g = g + (86 - g) * a;
-          b = b + (58 - b) * a;
-        }
-      }
-
-      if (attFrame) {
-        // The attention map is coarse (16x16 at the bottleneck), so each of its
-        // cells covers an 8x8 block of the picture. Nearest-neighbour is right
-        // here: smoothing would invent detail the model never produced.
-        const y = Math.min(attH - 1, ((i / SIZE) | 0) * attH / SIZE | 0);
-        const x = Math.min(attW - 1, (i % SIZE) * attW / SIZE | 0);
-        const a = attFrame[y * attW + x] * alpha;
-        r = r + (79 - r) * a;
-        g = g + (214 - g) * a;
-        b = b + (184 - b) * a;
-      }
-
-      const labels = s.layers.pred ? d.pred : s.layers.truth ? d.truth : null;
       if (labels) {
         const cls = labels[i];
         const visible = s.solo === null || s.solo === cls;
@@ -154,12 +130,33 @@ export class Viewer {
           g = g + (cg - g) * alpha;
           b = b + (cb - b) * alpha;
         }
+      } else if (errorView) {
+        // Wrong pixels in hard red; right ones keep a ghost of their crop colour
+        // so the field shapes stay readable instead of a red blob on a photo.
+        if (d.truth[i] === VOID) {
+          const a = alpha * 0.35;
+          r = r + (150 - r) * a; g = g + (150 - g) * a; b = b + (150 - b) * a;
+        } else if (d.error[i] > 127) {
+          r = r + (226 - r) * alpha;
+          g = g + (42 - g) * alpha;
+          b = b + (32 - b) * alpha;
+        } else {
+          const [cr, cg, cb] = this.palette[d.pred[i]] || [0, 0, 0];
+          const a = alpha * 0.22;
+          r = r + (cr - r) * a; g = g + (cg - g) * a; b = b + (cb - b) * a;
+        }
       }
 
-      if (s.layers.error && d.error && d.error[i] > 127) {
-        r = r + (255 - r) * 0.85;
-        g = g * 0.15;
-        b = b * 0.15;
+      // Uncertainty goes on last. Underneath the crop colours it was being
+      // painted over at 80% and was all but invisible.
+      if (s.uncertainty && d.conf) {
+        const doubt = 1 - d.conf[i] / 255;
+        if (doubt > 0.06) {
+          const a = Math.min(1, (doubt - 0.06) / 0.45) * (0.4 + 0.6 * alpha);
+          r = r + (255 - r) * a;
+          g = g + (0 - g) * a;
+          b = b + (110 - b) * a;
+        }
       }
 
       px[o] = r; px[o + 1] = g; px[o + 2] = b;
@@ -178,8 +175,7 @@ export class Viewer {
     this._drawBase(this.mixed);
     this._composite();
 
-    const anyOverlay = Object.values(this.state.layers).some(Boolean);
-    const wipeX = this.state.compare && anyOverlay ? this.state.wipe * W : W;
+    const wipeX = this.state.compare && this.hasOverlay() ? this.state.wipe * W : W;
 
     ctx.drawImage(this.plain.canvas, 0, 0, W, W);
     ctx.save();
@@ -191,7 +187,7 @@ export class Viewer {
 
     if (this.state.grid) {
       const step = W / 16; // one line every 8 pixels = 80 m on the ground
-      ctx.strokeStyle = "rgba(255,255,255,.13)";
+      ctx.strokeStyle = "rgba(10,20,30,.24)";
       ctx.lineWidth = 1;
       ctx.beginPath();
       for (let i = 1; i < 16; i++) {
