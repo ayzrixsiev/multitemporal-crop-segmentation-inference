@@ -1,16 +1,17 @@
+"""
+шnitializes a model's parameters.
+сredits to: https://gist.github.com/jeasinema
+
+гsage:
+    model = Model()
+    model.apply(weight_init)
+"""
+
 import torch.nn as nn
 import torch.nn.init as init
 
 
 def weight_init(m):
-    """
-    Initializes a model's parameters.
-    Credits to: https://gist.github.com/jeasinema
-
-    Usage:
-        model = Model()
-        model.apply(weight_init)
-    """
     if isinstance(m, nn.Conv1d):
         init.normal_(m.weight.data)
         if m.bias is not None:

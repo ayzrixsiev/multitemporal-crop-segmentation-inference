@@ -1,19 +1,20 @@
 import numpy as np
 import pandas as pd
 
-
-def mIou(y_true, y_pred, n_classes):
-    """
-    Mean Intersect over Union metric.
-    Computes the one versus all IoU for each class and returns the average.
-    Classes that do not appear in the provided set are not counted in the average.
-    Args:
+"""
+    mean Intersect over Union metric.
+    computes the one versus all IoU for each class and returns the average.
+    classes that do not appear in the provided set are not counted in the average.
+    args:
         y_true (1D-array): True labels
         y_pred (1D-array): Predicted labels
         n_classes (int): Total number of classes
-    Returns:
+    returns:
         mean Iou (float)
-    """
+"""
+
+
+def mIou(y_true, y_pred, n_classes):
     iou = 0
     n_observed = n_classes
     for i in range(n_classes):
@@ -31,19 +32,44 @@ def mIou(y_true, y_pred, n_classes):
     return iou / n_observed
 
 
+"""
+takes the confusion matrix and turns it into the actual report numbers.
+
+the matrix is: row = what the pixel really was, column = what the model said.
+so the diagonal is "guessed right" and everything else is a mistake.
+
+for every class j we pull out three counts:
+
+    tp = mat[j, j]              guessed this class, and it was this class
+    fp = column j minus tp      said this class, but it was something else
+    fn = row j minus tp         it was this class, but we said something else
+
+from those three we get four ways of asking "how good is this class":
+
+    precision = tp / (tp + fp)          when it says wheat, how often is it right
+    recall    = tp / (tp + fn)          how much of the real wheat did it find
+    f1        = balance of the two      one number instead of two
+    iou       = tp / (tp + fp + fn)     how much the predicted blob overlaps
+                                        the real field, punishes both mistakes
+
+then the same numbers are averaged over classes in two different ways, and the
+difference matters a lot:
+
+    micro = throw every class into one bucket first, then divide once.
+            counts pixels, so a huge class (meadow here) decides everything.
+
+    macro = score each class on its own, then take a plain average.
+            every class weighs the same, so a rare crop the model never finds
+            drags the score down. this is the honest one, and the mIoU reported
+            in papers is this one.
+
+accuracy at the bottom is just diagonal / everything -- the share of pixels we
+got right. it is the most forgiving number of all, which is why it sits well
+above the macro iou.
+"""
+
+
 def confusion_matrix_analysis(mat):
-    """
-    This method computes all the performance metrics from the confusion matrix. In addition to overall accuracy, the
-    precision, recall, f-score and IoU for each class is computed.
-    The class-wise metrics are averaged to provide overall indicators in two ways (MICRO and MACRO average)
-    Args:
-        mat (array): confusion matrix
-
-    Returns:
-        per_class (dict) : per class metrics
-        overall (dict): overall metrics
-
-    """
     TP = 0
     FP = 0
     FN = 0

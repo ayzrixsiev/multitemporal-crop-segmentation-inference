@@ -1,20 +1,6 @@
 """
-Drop-in replacement for torchnet.meter.AverageValueMeter.
-
-Upstream's train_semantic.py does `import torchnet as tnt` and then uses exactly one
-thing from that whole package: `tnt.meter.AverageValueMeter()`. torchnet has been
-unmaintained since 2019 and does not install cleanly on modern Python, so the meter
-lives here instead. Same three methods, same return contract:
-
-    m = AverageValueMeter()
-    m.add(loss.item())
-    mean, std = m.value()      # train_semantic.py only ever reads value()[0]
-    m.reset()
-
-The running mean/std use Welford's online algorithm, so nothing is stored per step and
-the numbers stay stable over thousands of batches. std is the sample (n-1) standard
-deviation, matching torchnet. With zero samples both are nan; with one sample the mean
-is that sample and std is inf, again matching torchnet.
+calculate average of loss after one epoch, batch
+done to make it easy to look at during training
 """
 
 import numpy as np

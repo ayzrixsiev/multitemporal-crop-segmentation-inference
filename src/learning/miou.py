@@ -1,15 +1,17 @@
 """
-Taken from https://github.com/davidtvs/PyTorch-ENet/blob/master/metric/confusionmatrix.py
+taken from https://github.com/davidtvs/PyTorch-ENet/blob/master/metric/confusionmatrix.py
 """
 
 import numpy as np
 import torch
 
+"""
+    base class for all metrics.
+    from: https://github.com/pytorch/tnt/blob/master/torchnet/meter/meter.py
+"""
+
 
 class Metric(object):
-    """Base class for all metrics.
-    From: https://github.com/pytorch/tnt/blob/master/torchnet/meter/meter.py
-    """
 
     def reset(self):
         pass
@@ -21,18 +23,20 @@ class Metric(object):
         pass
 
 
-class ConfusionMatrix(Metric):
-    """Constructs a confusion matrix for a multi-class classification problems.
+"""
+    constructs a confusion matrix for a multi-class classification problems.
+    does not support multi-label, multi-class problems.
 
-    Does not support multi-label, multi-class problems.
-
-    Keyword arguments:
+    keyword arguments:
     - num_classes (int): number of classes in the classification problem.
     - normalized (boolean, optional): Determines whether or not the confusion
     matrix is normalized or not. Default: False.
 
-    Modified from: https://github.com/pytorch/tnt/blob/master/torchnet/meter/confusionmeter.py
-    """
+    modified from: https://github.com/pytorch/tnt/blob/master/torchnet/meter/confusionmeter.py
+"""
+
+
+class ConfusionMatrix(Metric):
 
     def __init__(self, num_classes, normalized=False, device="cpu", lazy=True):
         super().__init__()
@@ -68,7 +72,7 @@ class ConfusionMatrix(Metric):
 
         """
 
-        # If target and/or predicted are tensors, convert them to numpy arrays
+        # if target and/or predicted are tensors, convert them to numpy arrays
         if self.device == "cpu":
             if torch.is_tensor(predicted):
                 predicted = predicted.cpu().numpy()
