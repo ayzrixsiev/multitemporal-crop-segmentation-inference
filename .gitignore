@@ -23,3 +23,6 @@ data/
 webapp/samples/*
 !webapp/samples/.gitkeep
 *.npz
+
+# Build artifact: deploy/build_space.sh rebuilds it from scratch every run.
+deploy/space-build/
