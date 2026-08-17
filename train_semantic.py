@@ -18,6 +18,8 @@ import torch.utils.data as data
 
 from src import utils, model_utils
 from src.dataset import Pastis_Dataset
+from src.learning.augment import SpatialAugment
+from src.learning.class_weights import class_weights_for_training, keep_mask
 from src.learning.meters import AverageValueMeter
 from src.learning.metrics import confusion_matrix_analysis
 from src.learning.miou import IoU
@@ -82,6 +84,28 @@ parser.add_argument(
 parser.add_argument("--epochs", default=100, type=int, help="Number of epochs per fold")
 parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
 parser.add_argument("--lr", default=0.001, type=float, help="Learning rate")
+parser.add_argument(
+    "--lr_schedule",
+    default="none",
+    type=str,
+    choices=["none", "cosine"],
+    help="Not upstream. 'cosine' anneals the learning rate over --epochs with "
+    "CosineAnnealingLR, stepped once per epoch.",
+)
+parser.add_argument(
+    "--class_weights",
+    default="none",
+    type=str,
+    choices=["none", "inverse", "sqrt_inverse"],
+    help="Not upstream. Weight the loss by label frequency over the training "
+    "folds only.",
+)
+parser.add_argument(
+    "--augment",
+    dest="augment",
+    action="store_true",
+    help="Not upstream. Random flips and quarter-turns of the training patches.",
+)
 parser.add_argument("--mono_date", default=None, type=str)
 parser.add_argument("--ref_date", default="2018-09-01", type=str)
 parser.add_argument(
@@ -114,7 +138,7 @@ parser.add_argument(
 )
 
 list_args = ["encoder_widths", "decoder_widths", "out_conv"]
-parser.set_defaults(cache=False, resume=False)
+parser.set_defaults(cache=False, resume=False, augment=False)
 
 
 def iterate(
@@ -198,7 +222,7 @@ def checkpoint(fold, log, config):
         json.dump(log, outfile, indent=4)
 
 
-def resume_from(fold, model, optimizer, config):
+def resume_from(fold, model, optimizer, scheduler, config):
     """
     Not upstream. Reload the state written by save_checkpoint_last() so a killed run
     can carry on instead of restarting from random weights, which is what Kaggle's
@@ -206,6 +230,10 @@ def resume_from(fold, model, optimizer, config):
 
     Returns (start_epoch, best_mIoU, trainlog). If there is nothing to resume from,
     returns a fresh start so that --resume is always safe to leave switched on.
+
+    The scheduler is restored after the optimizer, which is what carries the
+    resumed learning rate. A checkpoint written before --lr_schedule existed has
+    no scheduler entry, so the schedule is replayed instead.
     """
     fold_dir = os.path.join(config.res_dir, "Fold_{}".format(fold))
     last_path = os.path.join(fold_dir, "last.pth.tar")
@@ -218,6 +246,22 @@ def resume_from(fold, model, optimizer, config):
     state = torch.load(last_path, map_location="cpu")
     model.load_state_dict(state["state_dict"])
     optimizer.load_state_dict(state["optimizer"])
+
+    if scheduler is not None:
+        if state.get("scheduler") is not None:
+            scheduler.load_state_dict(state["scheduler"])
+        else:
+            print(
+                "Checkpoint holds no schedule state; replaying the "
+                "learning-rate schedule over {} epochs.".format(state["epoch"])
+            )
+            # CosineAnnealingLR.step() multiplies the rate already in the
+            # optimizer, so replay has to start from base_lr or it decays twice.
+            for group, base_lr in zip(optimizer.param_groups, scheduler.base_lrs):
+                group["lr"] = base_lr
+            for _ in range(state["epoch"]):
+                scheduler.step()
+        print("Learning rate resumes at {:.3e}".format(optimizer.param_groups[0]["lr"]))
 
     # json turns the integer epoch keys into strings on the way out, so undo that
     with open(log_path) as file:
@@ -233,22 +277,90 @@ def resume_from(fold, model, optimizer, config):
     return start_epoch, best_mIoU, trainlog
 
 
-def save_checkpoint_last(fold, epoch, best_mIoU, model, optimizer, config):
+def save_checkpoint_last(fold, epoch, best_mIoU, model, optimizer, scheduler, config):
     """
     Not upstream. model.pth.tar only ever holds the *best* epoch, which is the right
     thing to test with but the wrong thing to resume from -- it would silently throw
     away every epoch since the last improvement. So keep a separate latest-epoch
     checkpoint purely for resuming.
+
+    The schedule state is written only when there is one, so that a run at the
+    default --lr_schedule none produces the same file it did before.
     """
+    state = {
+        "epoch": epoch,
+        "best_mIoU": best_mIoU,
+        "state_dict": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+    }
+    if scheduler is not None:
+        state["scheduler"] = scheduler.state_dict()
     torch.save(
-        {
-            "epoch": epoch,
-            "best_mIoU": best_mIoU,
-            "state_dict": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-        },
+        state,
         os.path.join(config.res_dir, "Fold_{}".format(fold), "last.pth.tar"),
     )
+
+
+def jsonable(obj):
+    """
+    Not upstream. Convert numpy numbers to plain Python ones, and nan to None.
+
+    A class the model never predicts gives precision 0/0 = nan, which json.dumps
+    writes as a bare NaN -- not valid JSON, and rejected by the viewer's
+    JSON.parse.
+    """
+    if isinstance(obj, dict):
+        return {k: jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [jsonable(v) for v in obj]
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, (np.floating, float)):
+        value = float(obj)
+        return None if np.isnan(value) else value
+    return obj
+
+
+def per_class_performance(fold, conf_mat, config):
+    """
+    Not upstream. Write per_class.json for a single fold.
+
+    overall_performance() needs all five folds, so a one-fold run never got
+    per-class numbers. The ignored class is zeroed rather than deleted, which
+    gives the same scores but keeps the class ids of
+    webapp/pastis_meta.py:CLASS_NAMES.
+    """
+    conf_mat = np.asarray(conf_mat, dtype=np.float64).copy()
+    keep = keep_mask(config.num_classes, config.ignore_index)
+    conf_mat[~keep, :] = 0
+    conf_mat[:, ~keep] = 0
+
+    # A class with no predictions leaves 0/0 in the precision column.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        per_class, overall = confusion_matrix_analysis(conf_mat)
+
+    per_class = {k: v for k, v in per_class.items() if keep[int(k)]}
+    report = {
+        "fold": fold,
+        "ignored_class": config.ignore_index,
+        "per_class": per_class,
+        "overall": overall,
+    }
+    with open(
+        os.path.join(config.res_dir, "Fold_{}".format(fold), "per_class.json"), "w"
+    ) as outfile:
+        outfile.write(json.dumps(jsonable(report), indent=4))
+
+    print("Per-class IoU (fold {}):".format(fold))
+    for class_id in sorted(per_class, key=int):
+        print(
+            "  class {:>3}  IoU {:>6.2f}  precision {:>6.2f}  recall {:>6.2f}".format(
+                class_id,
+                100 * per_class[class_id]["IoU"],
+                100 * per_class[class_id]["Precision"],
+                100 * per_class[class_id]["Recall"],
+            )
+        )
 
 
 def save_results(fold, metrics, conf_mat, config):
@@ -265,6 +377,8 @@ def save_results(fold, metrics, conf_mat, config):
             os.path.join(config.res_dir, "Fold_{}".format(fold), "conf_mat.pkl"), "wb"
         ),
     )
+
+    per_class_performance(fold, conf_mat, config)
 
 
 def overall_performance(config):
@@ -286,8 +400,9 @@ def overall_performance(config):
     print("Overall performance:")
     print("Acc: {},  IoU: {}".format(perf["Accuracy"], perf["MACRO_IoU"]))
 
+    # jsonable() is not upstream: it keeps a nan out of the written JSON.
     with open(os.path.join(config.res_dir, "overall.json"), "w") as file:
-        file.write(json.dumps(perf, indent=4))
+        file.write(json.dumps(jsonable(perf), indent=4))
 
 
 def main(config):
@@ -325,9 +440,15 @@ def main(config):
         dt_val = Pastis_Dataset(**dt_args, folds=val_fold, cache=config.cache)
         dt_test = Pastis_Dataset(**dt_args, folds=test_fold)
 
+        # Not upstream. Training set only; val and test stay unaugmented.
+        train_set = dt_train
+        if config.augment:
+            train_set = SpatialAugment(train_set)
+            print("Spatial augmentation ON: random flips and quarter-turns.")
+
         collate_fn = lambda x: utils.pad_collate(x, pad_value=config.pad_value)
         train_loader = data.DataLoader(
-            dt_train,
+            train_set,
             batch_size=config.batch_size,
             shuffle=True,
             drop_last=True,
@@ -372,9 +493,19 @@ def main(config):
         # Optimizer and Loss
         optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
 
-        weights = torch.ones(config.num_classes, device=device).float()
-        weights[config.ignore_index] = 0
+        # Not upstream. At --class_weights none this is upstream's
+        # torch.ones with a 0 at the ignored class.
+        weights = class_weights_for_training(
+            config, dataset=dt_train, folds=train_folds, device=device
+        )
         criterion = nn.CrossEntropyLoss(weight=weights)
+
+        # Not upstream. See --lr_schedule.
+        scheduler = None
+        if config.lr_schedule == "cosine":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=config.epochs
+            )
 
         # Training loop
         trainlog = {}
@@ -382,7 +513,7 @@ def main(config):
         start_epoch = 1
         if config.resume:
             start_epoch, best_mIoU, trainlog = resume_from(
-                fold + 1, model, optimizer, config
+                fold + 1, model, optimizer, scheduler, config
             )
         for epoch in range(start_epoch, config.epochs + 1):
             print("EPOCH {}/{}".format(epoch, config.epochs))
@@ -397,6 +528,9 @@ def main(config):
                 mode="train",
                 device=device,
             )
+            # Not upstream. The rate this epoch ran at, read before the step below.
+            if scheduler is not None:
+                train_metrics["train_lr"] = optimizer.param_groups[0]["lr"]
             if epoch % config.val_every == 0 and epoch > config.val_after:
                 print("Validation . . . ")
                 model.eval()
@@ -436,7 +570,14 @@ def main(config):
                 trainlog[epoch] = {**train_metrics}
                 checkpoint(fold + 1, trainlog, config)
 
-            save_checkpoint_last(fold + 1, epoch, best_mIoU, model, optimizer, config)
+            # Not upstream. Step before the checkpoint is written, so the saved
+            # state is the one the next epoch starts from.
+            if scheduler is not None:
+                scheduler.step()
+
+            save_checkpoint_last(
+                fold + 1, epoch, best_mIoU, model, optimizer, scheduler, config
+            )
 
         print("Testing best epoch . . .")
         model.load_state_dict(

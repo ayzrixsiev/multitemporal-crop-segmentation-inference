@@ -80,34 +80,28 @@ async function boot() {
   const bar = $("statbar");
   bar.querySelectorAll(".stat").forEach((e) => e.remove());
 
-  const chips = [];
   if (status.model_loaded) {
     const run = status.run;
     const test = run.test_metrics || {};
     if (test.test_accuracy !== undefined)
-      chips.push(stat("Accuracy", fmt(test.test_accuracy, 0), "hero", "%"));
+      bar.appendChild(stat("Accuracy", fmt(test.test_accuracy, 0), "hero", "%"));
     if (test.test_IoU !== undefined) {
       // test_IoU is written as a percentage; older runs wrote a fraction.
       const iou = test.test_IoU < 1 ? test.test_IoU * 100 : test.test_IoU;
-      chips.push(stat("mIoU", fmt(iou, 0), "hero"));
+      bar.appendChild(stat("mIoU", fmt(iou, 0), "hero"));
     }
-    chips.push(stat("Parameters", run.n_params.toLocaleString()));
-    chips.push(stat("Device", run.device));
+    bar.appendChild(stat("Parameters", run.n_params.toLocaleString()));
+    bar.appendChild(stat("Device", run.device));
   } else {
-    chips.push(stat("Model", "not loaded", "bad"));
+    bar.appendChild(stat("Model", "not loaded", "bad"));
     toast(status.error || "No checkpoint found.", true);
   }
 
   const epochs = (status.config || {}).epochs;
-  if (epochs !== undefined && epochs !== null) chips.push(stat("Epochs", epochs));
+  if (epochs !== undefined && epochs !== null) bar.appendChild(stat("Epochs", epochs));
   const px = (status.patch || {}).pixel_size_m;
   if (px !== undefined && px !== null)
-    chips.push(stat("Resolution", fmt(px, 0), "", "m/px"));
-
-  // The name sits in the middle of the readings, not at the head of them.
-  const name = bar.querySelector(".model-name");
-  const half = Math.ceil(chips.length / 2);
-  chips.forEach((c, i) => (i < half ? bar.insertBefore(c, name) : bar.appendChild(c)));
+    bar.appendChild(stat("Resolution", fmt(px, 0), "", "m/px"));
 
   S.viewer = new Viewer($("canvas"), S.classes);
   S.map = new PatchMap("map");

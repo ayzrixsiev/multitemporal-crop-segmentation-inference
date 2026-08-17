@@ -38,9 +38,7 @@
           "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 
-  /* Both side columns the same width: an asymmetric frame makes the centred
-     top bar read as off-centre even when it is not. */
-  --rail: 404px;
+  --rail: 286px;
   --panel-w: 404px;
   --top: 54px;
 }
@@ -125,18 +123,11 @@ code {
 }
 .titlebar::-webkit-scrollbar { display: none; }
 
-/* The one fixed thing in a row of changing readings, so it is lifted into its
-   own object instead of sitting in the flow as another piece of text. */
 .model-name {
-  font: 700 16px/1 var(--sans);
-  letter-spacing: -.01em;
+  font: 700 18px/1 var(--sans);
+  letter-spacing: -.02em;
   color: var(--ink);
-  margin: 0 18px;
-  padding: 8px 15px;
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  box-shadow: var(--shadow);
+  padding-right: 20px;
   white-space: nowrap;
 }
 
@@ -158,11 +149,6 @@ code {
   height: 17px;
   background: var(--line);
 }
-/* Nothing to divide at the two ends of the run, and the name is the centre
-   rather than another reading -- so it gets air on both sides, not hairlines. */
-.stat:first-child::before,
-.model-name + .stat::before { display: none; }
-
 .stat label {
   font-size: 9px;
   font-weight: 600;
@@ -930,7 +916,7 @@ table.crops tbody tr.is-solo td { background: var(--panel-3); }
 
 /* ───────────────────────────  RESPONSIVE  ─────────────────────────── */
 
-@media (max-width: 1420px) { :root { --panel-w: 358px; --rail: 358px; } }
+@media (max-width: 1420px) { :root { --panel-w: 358px; --rail: 258px; } }
 
 @media (max-width: 1180px) {
   body { overflow: auto; }
